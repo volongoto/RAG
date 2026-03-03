@@ -4,8 +4,8 @@ services:
     build:
       context: ./ruoyi-fastapi-frontend
       dockerfile: Dockerfile
-    image: ruoyi-frontend:latest
-    container_name: ruoyi-frontend
+    image: cradle-frontend:latest
+    container_name: cradle-frontend
     ports:
       - "12580:80"
     volumes:
@@ -20,8 +20,8 @@ services:
     build:
       context: ./ruoyi-fastapi-backend
       dockerfile: Dockerfile
-    image: ruoyi-backend:latest
-    container_name: ruoyi-backend
+    image: cradle-backend:latest
+    container_name: cradle-backend
     ports:
       - "19099:9099"
     depends_on:
@@ -32,18 +32,20 @@ services:
     networks:
       - ruoyi-network
 
-  # PostgreSQL服务
+  # PostgreSQL服务 (带pgvector扩展)
   ruoyi-db:
-    image: postgres:17.2
-    container_name: ruoyi-db
+    image: pgvector/pgvector:pg17
+    container_name: cradle-db
     environment:
       POSTGRES_PASSWORD: root
       POSTGRES_DB: ruoyi-fastapi
       POSTGRES_INITDB_ARGS: --encoding=UTF8 --lc-collate=C --lc-ctype=C
     ports:
-      - "15432:5432"
+      - "25432:5432"
     volumes:
-      - ./ruoyi-fastapi-backend/sql/ruoyi-fastapi-pg.sql:/docker-entrypoint-initdb.d/ruoyi-fastapi-pg.sql
+      - ./ruoyi-fastapi-backend/sql/ruoyi-fastapi-pg.sql:/docker-entrypoint-initdb.d/1-ruoyi-fastapi-pg.sql
+      - ./ruoyi-fastapi-backend/sql/rag_tables.sql:/docker-entrypoint-initdb.d/2-rag_tables.sql
+      - ./ruoyi-fastapi-backend/sql/rag_menu.sql:/docker-entrypoint-initdb.d/3-rag_menu.sql
     networks:
       - ruoyi-network
     healthcheck:
@@ -55,7 +57,7 @@ services:
   # Redis服务
   ruoyi-redis:
     image: redis:latest
-    container_name: ruoyi-redis
+    container_name: cradle-redis
     ports:
       - "16379:6379"
     networks:
@@ -69,5 +71,5 @@ services:
 # 网络配置
 networks:
   ruoyi-network:
-    name: ruoyi-network
+    name: cradle-network
     driver: bridge

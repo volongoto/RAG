@@ -137,6 +137,24 @@ class UploadSettings:
             os.makedirs(self.DOWNLOAD_PATH)
 
 
+class RAGSettings(BaseSettings):
+    """
+    RAG配置
+    """
+
+    rag_llm_api_base: str = 'https://api.siliconflow.cn/v1'
+    rag_llm_api_key: str = ''
+    rag_llm_model: str = 'Qwen/Qwen2.5-32B-Instruct'
+    rag_embedding_api_base: str = 'https://api.siliconflow.cn/v1'
+    rag_embedding_api_key: str = ''
+    rag_embedding_model: str = 'BAAI/bge-m3'
+    rag_embedding_dimension: int = 1024
+    rag_chunk_size: int = 512
+    rag_chunk_overlap: int = 50
+    rag_top_k: int = 5
+    rag_similarity_threshold: float = 0.7
+
+
 class CachePathConfig:
     """
     缓存目录配置
@@ -196,6 +214,12 @@ class GetConfig:
         # 实例上传配置
         return UploadSettings()
 
+    def get_rag_config(self) -> RAGSettings:
+        """
+        获取RAG配置
+        """
+        return RAGSettings()
+
     @staticmethod
     def parse_cli_args() -> None:
         """
@@ -245,3 +269,5 @@ RedisConfig = get_config.get_redis_config()
 GenConfig = get_config.get_gen_config()
 # 上传配置
 UploadConfig = get_config.get_upload_config()
+# RAG配置
+RAGConfig = get_config.get_rag_config()
