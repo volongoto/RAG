@@ -15,8 +15,6 @@ from starlette.routing import BaseRoute
 from starlette.types import ASGIApp, Lifespan
 from typing_extensions import deprecated
 
-from utils.log_util import logger
-
 
 class APIRouterPro(APIRouter):
     """
@@ -288,90 +286,93 @@ class APIRouterPro(APIRouter):
 
 class RouterRegister:
     """
-    璺敱娉ㄥ唽鍣紝鐢ㄤ簬鑷姩娉ㄥ唽鎵€鏈塩ontroller鐩綍涓嬬殑璺敱
+    路由注册器，用于自动注册所有controller目录下的路由
     """
 
     def __init__(self, app: FastAPI) -> None:
         """
-        鍒濆鍖栬矾鐢辨敞鍐屽櫒
+        初始化路由注册器
 
-        :param app: FastAPI瀵硅薄
+        :param app: FastAPI对象
         """
         self.app = app
+        # 获取项目根目录
         self.project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
         sys.path.insert(0, self.project_root)
 
     def _find_controller_files(self) -> list[str]:
         """
-        鏌ユ壘鎵€鏈塩ontroller鍜宎pi鐩綍涓嬬殑py鏂囦欢
+        查找所有controller和api目录下的py文件
 
-        :return: py鏂囦欢璺緞鍒楄〃
+        :return: py文件路径列表
         """
         controller_files = []
-        # 閬嶅巻鎵€鏈夌洰褰曪紝鏌ユ壘controller鍜宎pi鐩綍
+        # 遍历所有目录，查找controller和api目录
         for root, _dirs, files in os.walk(self.project_root):
-            # 妫€鏌ュ綋鍓嶇洰褰曟槸鍚︿负controller鎴朼pi鐩綍
+            # 检查当前目录是否为controller或api目录
             dir_name = os.path.basename(root)
             if dir_name in ('controller', 'api'):
-                # 閬嶅巻鐩綍涓嬬殑鎵€鏈塸y鏂囦欢
+                # 遍历目录下的所有py文件
                 for file in files:
                     if file.endswith('.py') and not file.startswith('__'):
                         file_path = os.path.join(root, file)
                         controller_files.append(file_path)
         return controller_files
 
-    def _import_module_and_get_routers(
-        self, controller_files: list[str]
-    ) -> tuple[list[tuple[str, APIRouter]], list[tuple[str, str]]]:
+    def _import_module_and_get_routers(self, controller_files: list[str]) -> list[tuple[str, APIRouter]]:
         """
-        瀵煎叆妯″潡骞惰幏鍙栬矾鐢卞疄渚?
-        :param controller_files: controller鐩綍涓嬬殑py鏂囦欢璺緞鍒楄〃
-        :return: 璺敱瀹炰緥鍒楄〃
+        导入模块并获取路由实例
+
+        :param controller_files: controller目录下的py文件路径列表
+        :return: 路由实例列表
         """
         routers = []
-        import_failures = []
         for file_path in controller_files:
-            # 璁＄畻妯″潡璺緞
+            # 计算模块路径
             relative_path = os.path.relpath(file_path, self.project_root)
             module_name = relative_path.replace(os.sep, '.')[:-3]
 
             try:
+                # 动态导入模块
                 module = importlib.import_module(module_name)
-                # 閬嶅巻妯″潡灞炴€э紝瀵绘壘APIRouter鍜孉PIRouterPro瀹炰緥
+                # 遍历模块属性，寻找APIRouter和APIRouterPro实例
                 for attr_name in dir(module):
                     attr = getattr(module, attr_name)
-                    # 瀵逛簬APIRouterPro瀹炰緥锛屽彧鏈夊綋auto_register=True鏃舵墠娣诲姞
+                    # 对于APIRouterPro实例，只有当auto_register=True时才添加
                     if isinstance(attr, APIRouterPro):
                         if attr.auto_register:
                             routers.append((attr_name, attr))
-                    # 瀵逛簬APIRouter瀹炰緥锛岀洿鎺ユ坊鍔?                    elif isinstance(attr, APIRouter):
+                    # 对于APIRouter实例，直接添加
+                    elif isinstance(attr, APIRouter):
                         routers.append((attr_name, attr))
             except Exception as e:
-                import_failures.append((module_name, str(e)))
-                logger.exception(f'Error importing module {module_name}: {e}')
-        return routers, import_failures
+                print(f'Error importing module {module_name}: {e}')
+        return routers
 
     def _sort_routers(self, routers: list[tuple[str, APIRouter]]) -> list[tuple[str, APIRouter]]:
         """
-        鎸夎鍒欐帓搴忚矾鐢?
-        :param routers: 璺敱瀹炰緥鍒楄〃
-        :return: 鎺掑簭鍚庣殑璺敱瀹炰緥鍒楄〃
+        按规则排序路由
+
+        :param routers: 路由实例列表
+        :return: 排序后的路由实例列表
         """
 
+        # 按规则排序路由
         def sort_key(item: tuple[str, APIRouter]) -> Union[tuple[Literal[0], int, str], tuple[Literal[1], str]]:
             attr_name, router = item
-            # APIRouterPro瀹炰緥鎸塷rder_num鎺掑簭锛屽簭鍙疯秺灏忚秺闈犲墠
+            # APIRouterPro实例按order_num排序，序号越小越靠前
             if isinstance(router, APIRouterPro):
                 return (0, router.order_num, attr_name)
+            # APIRouter实例按变量名首字母排序
             return (1, attr_name)
 
         return sorted(routers, key=sort_key)
 
     def _register_routers_to_app(self, routers: list[tuple[str, APIRouter]]) -> None:
         """
-        灏嗚矾鐢辨敞鍐屽埌FastAPI搴旂敤
+        将路由注册到FastAPI应用
 
-        :param routers: 鎺掑簭鍚庣殑璺敱瀹炰緥鍒楄〃
+        :param routers: 排序后的路由实例列表
         :return: None
         """
         for _attr_name, router in routers:
@@ -379,33 +380,27 @@ class RouterRegister:
 
     def register_routers(self) -> None:
         """
-        鑷姩娉ㄥ唽鎵€鏈塩ontroller鐩綍涓嬬殑璺敱
+        自动注册所有controller目录下的路由
 
         :return: None
         """
-        # 鏌ユ壘鎵€鏈塩ontroller鐩綍涓嬬殑py鏂囦欢
+        # 查找所有controller目录下的py文件
         controller_files = self._find_controller_files()
-        logger.info(f'Router auto-register scan completed, controller/api files found: {len(controller_files)}')
-        routers, import_failures = self._import_module_and_get_routers(controller_files)
+        # 导入模块并获取路由实例
+        routers = self._import_module_and_get_routers(controller_files)
+        # 按规则排序路由
         sorted_routers = self._sort_routers(routers)
-        # 娉ㄥ唽璺敱鍒癋astAPI搴旂敤
+        # 注册路由到FastAPI应用
         self._register_routers_to_app(sorted_routers)
-        logger.info(
-            'Router auto-register summary: '
-            f'scanned={len(controller_files)}, '
-            f'registered={len(sorted_routers)}, '
-            f'import_failed={len(import_failures)}'
-        )
-        for module_name, error_msg in import_failures:
-            logger.error(f'Router import failure detail: module={module_name}, error={error_msg}')
 
 
 def auto_register_routers(app: FastAPI) -> None:
     """
-    鑷姩娉ㄥ唽鎵€鏈塩ontroller鐩綍涓嬬殑璺敱
+    自动注册所有controller目录下的路由
 
-    :param app: FastAPI瀵硅薄
+    :param app: FastAPI对象
     :return: None
     """
+    # 使用路由注册器进行注册
     router_register = RouterRegister(app)
     router_register.register_routers()
