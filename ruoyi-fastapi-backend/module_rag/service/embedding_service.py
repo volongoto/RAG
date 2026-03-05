@@ -30,7 +30,7 @@ class EmbeddingService:
             api_key=RAGConfig.rag_embedding_api_key or 'sk-dummy',
             api_base=RAGConfig.rag_embedding_api_base,
             model_name=RAGConfig.rag_embedding_model,
-            embed_batch_size=50,
+            embed_batch_size=RAGConfig.rag_embedding_batch_size,
         )
         logger.info(f'Embedding模型初始化完成: {RAGConfig.rag_embedding_model}')
 

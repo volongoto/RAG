@@ -145,9 +145,12 @@ class RAGSettings(BaseSettings):
     rag_llm_api_base: str = 'https://api.siliconflow.cn/v1'
     rag_llm_api_key: str = ''
     rag_llm_model: str = 'Qwen/Qwen2.5-32B-Instruct'
+    rag_llm_temperature: float = 0.7
+    rag_llm_max_tokens: int = 2000
     rag_embedding_api_base: str = 'https://api.siliconflow.cn/v1'
     rag_embedding_api_key: str = ''
     rag_embedding_model: str = 'BAAI/bge-m3'
+    rag_embedding_batch_size: int = 50
     rag_embedding_dimension: int = 1024
     rag_chunk_size: int = 512
     rag_chunk_overlap: int = 50

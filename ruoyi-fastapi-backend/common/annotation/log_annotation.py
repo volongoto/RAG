@@ -52,6 +52,9 @@ class Log:
         self.business_type = business_type.value
         self.log_type = log_type
         self._oper_param_len = 2000
+        self._json_result_len = 2000
+        self._error_msg_len = 2000
+        self._truncated_suffix = '...(truncated)'
 
     def __call__(self, func: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
         @wraps(func)
@@ -66,7 +69,7 @@ class Log:
             session_name_list = get_function_parameters_name_by_type(func, AsyncSession)
             query_db = get_function_parameters_value_by_name(func, session_name_list[0], *args, **kwargs)
             request_method = request.method
-            user_agent = request.headers.get('User-Agent')
+            user_agent = request.headers.get('User-Agent', '')
             # 获取操作类型
             operator_type = self._get_oper_type(user_agent)
             # 获取请求的url
@@ -77,9 +80,7 @@ class Log:
             oper_location = await self._get_oper_location(oper_ip)
             # 获取请求参数
             oper_param = await self._get_request_params(request)
-            # 日志表请求参数字段长度最大为2000，因此在此处判断长度
-            if len(oper_param) > self._oper_param_len:
-                oper_param = '请求参数过长'
+            oper_param = self._truncate_text(oper_param, self._oper_param_len)
 
             # 获取操作时间
             oper_time = datetime.now()
@@ -103,9 +104,10 @@ class Log:
             request_from_swagger, request_from_redoc = self._is_request_from_swagger_or_redoc(request)
             # 根据响应结果的类型使用不同的方法获取响应结果参数
             result_dict = self._get_result_dict(result, request_from_swagger, request_from_redoc)
-            json_result = json.dumps(result_dict, ensure_ascii=False)
+            json_result = self._truncate_text(json.dumps(result_dict, ensure_ascii=False), self._json_result_len)
             # 根据响应结果获取响应状态及异常信息
             status, error_msg = self._get_status_and_error_msg(result_dict)
+            error_msg = self._truncate_text(error_msg, self._error_msg_len)
             # 根据日志类型向对应的日志表插入数据
             if self.log_type == 'login':
                 # 登录请求来自于api文档时不记录登录日志，其余情况则记录
@@ -308,6 +310,23 @@ class Log:
             error_msg = result_dict.get('msg')
 
         return status, error_msg
+
+    def _truncate_text(self, value: Any, max_len: int) -> str:
+        """
+        限制日志字段长度，避免超过数据库varchar上限导致写入失败。
+
+        :param value: 需要处理的值
+        :param max_len: 允许的最大长度
+        :return: 截断后的字符串
+        """
+        if value is None:
+            return ''
+        text = str(value)
+        if max_len <= 0 or len(text) <= max_len:
+            return text
+        if max_len <= len(self._truncated_suffix):
+            return text[:max_len]
+        return f'{text[: max_len - len(self._truncated_suffix)]}{self._truncated_suffix}'
 
     def _is_request_from_swagger_or_redoc(self, request: Request) -> tuple[bool, bool]:
         """

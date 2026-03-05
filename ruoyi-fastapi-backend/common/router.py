@@ -319,7 +319,9 @@ class RouterRegister:
                         controller_files.append(file_path)
         return controller_files
 
-    def _import_module_and_get_routers(self, controller_files: list[str]) -> list[tuple[str, APIRouter]]:
+    def _import_module_and_get_routers(
+        self, controller_files: list[str]
+    ) -> tuple[list[tuple[str, APIRouter]], list[tuple[str, str]]]:
         """
         导入模块并获取路由实例
 
@@ -327,6 +329,7 @@ class RouterRegister:
         :return: 路由实例列表
         """
         routers = []
+        import_failures = []
         for file_path in controller_files:
             # 计算模块路径
             relative_path = os.path.relpath(file_path, self.project_root)
@@ -346,8 +349,10 @@ class RouterRegister:
                     elif isinstance(attr, APIRouter):
                         routers.append((attr_name, attr))
             except Exception as e:
-                print(f'Error importing module {module_name}: {e}')
-        return routers
+                error_summary = f'{type(e).__name__}: {e}'
+                import_failures.append((module_name, error_summary))
+                print(f'Error importing module {module_name}: {error_summary}')
+        return routers, import_failures
 
     def _sort_routers(self, routers: list[tuple[str, APIRouter]]) -> list[tuple[str, APIRouter]]:
         """
@@ -387,11 +392,19 @@ class RouterRegister:
         # 查找所有controller目录下的py文件
         controller_files = self._find_controller_files()
         # 导入模块并获取路由实例
-        routers = self._import_module_and_get_routers(controller_files)
+        routers, import_failures = self._import_module_and_get_routers(controller_files)
         # 按规则排序路由
         sorted_routers = self._sort_routers(routers)
         # 注册路由到FastAPI应用
         self._register_routers_to_app(sorted_routers)
+        print(
+            'Router auto-register summary: '
+            f'scanned_files={len(controller_files)}, '
+            f'registered_routers={len(sorted_routers)}, '
+            f'import_failures={len(import_failures)}'
+        )
+        for module_name, error_summary in import_failures:
+            print(f'Router import failure detail: module={module_name}, error={error_summary}')
 
 
 def auto_register_routers(app: FastAPI) -> None:

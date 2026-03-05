@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import datetime
 from typing import Any
 
@@ -30,12 +31,13 @@ class RAGEngine:
             api_key=RAGConfig.rag_llm_api_key or 'sk-dummy',
             api_base=RAGConfig.rag_llm_api_base,
             model=RAGConfig.rag_llm_model,
-            temperature=0.7,
-            max_tokens=2000,
+            temperature=RAGConfig.rag_llm_temperature,
+            max_tokens=RAGConfig.rag_llm_max_tokens,
         )
 
     async def query(
         self,
+        query_db: AsyncSession,
         query_text: str,
         kb_ids: list[int],
         top_k: int = None,
@@ -45,23 +47,37 @@ class RAGEngine:
         start_time = datetime.now()
 
         try:
+            if query_db is None:
+                raise ServiceException(message='Database session is not available')
+
+            query_text = (query_text or '').strip()
+            if not query_text:
+                raise ServiceException(message='Query text cannot be empty')
+
             query_embedding = await self.embedding_service.get_text_embedding(query_text)
 
-            top_k = top_k or RAGConfig.rag_top_k
-            threshold = threshold or RAGConfig.rag_similarity_threshold
+            top_k = top_k if top_k is not None else RAGConfig.rag_top_k
+            threshold = threshold if threshold is not None else RAGConfig.rag_similarity_threshold
 
-            chunks = await ChunkDao.similarity_search(None, kb_ids, query_embedding, top_k, threshold)
+            chunks = await ChunkDao.similarity_search(query_db, kb_ids, query_embedding, top_k, threshold)
+
+            # If strict threshold filtering returns no chunks, fallback to unfiltered top-k.
+            if not chunks and threshold > 0:
+                logger.warning(
+                    f'No chunks found with threshold={threshold}, fallback to threshold=0.0, kb_ids={kb_ids}'
+                )
+                chunks = await ChunkDao.similarity_search(query_db, kb_ids, query_embedding, top_k, 0.0)
 
             if not chunks:
                 return {
-                    'answer_text': 'No relevant information was found in the selected knowledge bases.',
+                    'answer_text': '\u5728\u6240\u9009\u77e5\u8bc6\u5e93\u4e2d\u672a\u68c0\u7d22\u5230\u4e0e\u95ee\u9898\u76f8\u5173\u7684\u4fe1\u606f\u3002',
                     'source_chunks': [],
                     'response_time': int((datetime.now() - start_time).total_seconds() * 1000),
                 }
 
             context = self._build_context(chunks)
             prompt = self._build_prompt(query_text, context)
-            answer = await self._generate_answer(prompt)
+            answer = self._post_process_answer(await self._generate_answer(prompt))
 
             return {
                 'answer_text': answer,
@@ -77,16 +93,21 @@ class RAGEngine:
         context_parts = []
         for i, chunk in enumerate(chunks, 1):
             content = self._row_get(chunk, 'content')
-            context_parts.append(f'[Document {i}]\n{content}')
+            context_parts.append(f'[\u53c2\u8003\u5185\u5bb9 {i}]\n{content}')
         return '\n\n'.join(context_parts)
 
     def _build_prompt(self, query: str, context: str) -> str:
         """Build prompt for LLM answer generation."""
         return (
-            'You are a helpful assistant. Answer the user question using the reference content below.\n'
-            'If the reference does not contain enough information, say so explicitly.\n\n'
-            f'Reference:\n{context}\n\n'
-            f'User question:\n{query}\n'
+            '\u4f60\u662f\u4f01\u4e1a\u77e5\u8bc6\u5e93\u95ee\u7b54\u52a9\u624b\uff0c\u8bf7\u4e25\u683c\u57fa\u4e8e\u53c2\u8003\u8d44\u6599\u56de\u7b54\u7528\u6237\u95ee\u9898\u3002\n'
+            '\u56de\u7b54\u89c4\u5219\uff1a\n'
+            '1. \u5fc5\u987b\u4f7f\u7528\u7b80\u4f53\u4e2d\u6587\u4f5c\u7b54\u3002\n'
+            '2. \u5148\u7ed9\u7ed3\u8bba\uff0c\u518d\u7ed9\u7b80\u8981\u4f9d\u636e\uff1b\u6700\u591a 3 \u6761\u8981\u70b9\uff0c\u603b\u5b57\u6570\u4e0d\u8d85\u8fc7 180 \u5b57\u3002\n'
+            '3. \u4e25\u7981\u91cd\u590d\u540c\u4e00\u53e5\u8bdd\u6216\u540c\u4e00\u542b\u4e49\u7684\u53e5\u5b50\u3002\n'
+            '4. \u5982\u679c\u53c2\u8003\u8d44\u6599\u4e0d\u8db3\u4ee5\u56de\u7b54\uff0c\u8bf7\u660e\u786e\u8bf4\u660e\uff1a\u6839\u636e\u5f53\u524d\u77e5\u8bc6\u5e93\u5185\u5bb9\u65e0\u6cd5\u786e\u5b9a\u3002\n'
+            '5. \u4e0d\u8981\u8f93\u51fa\u4e0e\u95ee\u9898\u65e0\u5173\u7684\u4fe1\u606f\u3002\n\n'
+            f'\u53c2\u8003\u8d44\u6599\uff1a\n{context}\n\n'
+            f'\u7528\u6237\u95ee\u9898\uff1a\n{query}\n'
         )
 
     async def _generate_answer(self, prompt: str) -> str:
@@ -97,6 +118,36 @@ class RAGEngine:
         except Exception as e:
             logger.error(f'LLM answer generation failed: {e}')
             raise
+
+    def _post_process_answer(self, answer: str) -> str:
+        """
+        Normalize model output to reduce repetitive content and keep it concise.
+        """
+        text = (answer or '').strip()
+        if not text:
+            return '\u6839\u636e\u5f53\u524d\u77e5\u8bc6\u5e93\u5185\u5bb9\u65e0\u6cd5\u786e\u5b9a\u3002'
+
+        text = re.sub(r'\s+', ' ', text)
+        segments = re.split(r'(?<=[。！？；.!?;])\s*', text)
+
+        unique_segments: list[str] = []
+        seen_keys: set[str] = set()
+        for segment in segments:
+            seg = segment.strip()
+            if not seg:
+                continue
+            key = re.sub(r'[\s，。！？；,.!?;:：]+', '', seg)
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            unique_segments.append(seg)
+            if len(unique_segments) >= 6:
+                break
+
+        cleaned = ' '.join(unique_segments).strip() if unique_segments else text
+        if len(cleaned) > 240:
+            cleaned = cleaned[:240].rstrip() + '...'
+        return cleaned
 
     def _format_source_chunks(self, chunks: list) -> list[dict[str, Any]]:
         """Normalize chunk rows into response payload."""
@@ -115,7 +166,7 @@ class RAGEngine:
                 {
                     'chunk_id': self._row_get(chunk, 'chunk_id'),
                     'doc_id': self._row_get(chunk, 'doc_id'),
-                    'doc_name': f"Document {self._row_get(chunk, 'doc_id')}",
+                    'doc_name': f"\u6587\u6863 {self._row_get(chunk, 'doc_id')}",
                     'content': self._row_get(chunk, 'content'),
                     'page_num': page_nums[0] if page_nums else None,
                     'paragraph_index': paragraph_indices[0] if paragraph_indices else None,

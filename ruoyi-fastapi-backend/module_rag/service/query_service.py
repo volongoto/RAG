@@ -31,6 +31,7 @@ class QueryService:
         
         try:
             result = await self.rag_engine.query(
+                query_db=query_db,
                 query_text=query_request.query_text,
                 kb_ids=query_request.kb_ids,
                 top_k=query_request.top_k,
@@ -44,7 +45,7 @@ class QueryService:
                 start_time,
             )
             
-            return QueryResponseModel(**result)
+            return QueryResponseModel(**CamelCaseUtil.transform_result(result))
         except Exception as e:
             raise e
 
