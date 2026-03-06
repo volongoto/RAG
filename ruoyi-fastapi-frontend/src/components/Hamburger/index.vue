@@ -1,7 +1,7 @@
 <template>
-  <div style="padding: 0 15px;" @click="toggleClick">
+  <div class="hamburger-wrap" @click="toggleClick">
     <svg
-      :class="{'is-active':isActive}"
+      :class="{ 'is-active': isActive }"
       class="hamburger"
       viewBox="0 0 1024 1024"
       xmlns="http://www.w3.org/2000/svg"
@@ -22,21 +22,34 @@ defineProps({
   }
 })
 
-const emit = defineEmits()
+const emit = defineEmits(['toggleClick'])
 const toggleClick = () => {
-  emit('toggleClick');
+  emit('toggleClick')
 }
 </script>
 
 <style scoped>
+.hamburger-wrap {
+  padding: 0 15px;
+}
+
 .hamburger {
   display: inline-block;
   vertical-align: middle;
   width: 20px;
   height: 20px;
+  color: var(--navbar-text);
+  transition: transform 0.38s cubic-bezier(0.22, 1, 0.36, 1), filter 0.28s ease, color 0.28s ease;
 }
 
 .hamburger.is-active {
-  transform: rotate(180deg);
+  transform: rotate(180deg) scale(1.04);
+  color: var(--accent-cyan);
+  filter: drop-shadow(0 0 8px rgba(20, 227, 255, 0.7));
+}
+
+.hamburger-wrap:hover .hamburger {
+  color: var(--accent-cyan);
+  filter: drop-shadow(0 0 6px rgba(20, 227, 255, 0.5));
 }
 </style>

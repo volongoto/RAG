@@ -20,13 +20,13 @@ import { AppMain, Navbar, Settings, TagsView } from './components'
 import useAppStore from '@/store/modules/app'
 import useSettingsStore from '@/store/modules/settings'
 
+const appStore = useAppStore()
 const settingsStore = useSettingsStore()
-const theme = computed(() => settingsStore.theme);
-const sideTheme = computed(() => settingsStore.sideTheme);
-const sidebar = computed(() => useAppStore().sidebar);
-const device = computed(() => useAppStore().device);
-const needTagsView = computed(() => settingsStore.tagsView);
-const fixedHeader = computed(() => settingsStore.fixedHeader);
+const theme = computed(() => settingsStore.theme)
+const sidebar = computed(() => appStore.sidebar)
+const device = computed(() => appStore.device)
+const needTagsView = computed(() => settingsStore.tagsView)
+const fixedHeader = computed(() => settingsStore.fixedHeader)
 
 const classObj = computed(() => ({
   hideSidebar: !sidebar.value.opened,
@@ -35,31 +35,31 @@ const classObj = computed(() => ({
   mobile: device.value === 'mobile'
 }))
 
-const { width, height } = useWindowSize();
+const { width } = useWindowSize()
 const WIDTH = 992; // refer to Bootstrap's responsive design
 
 watch(() => device.value, () => {
   if (device.value === 'mobile' && sidebar.value.opened) {
-    useAppStore().closeSideBar({ withoutAnimation: false })
+    appStore.closeSideBar({ withoutAnimation: false })
   }
 })
 
 watchEffect(() => {
   if (width.value - 1 < WIDTH) {
-    useAppStore().toggleDevice('mobile')
-    useAppStore().closeSideBar({ withoutAnimation: true })
+    appStore.toggleDevice('mobile')
+    appStore.closeSideBar({ withoutAnimation: true })
   } else {
-    useAppStore().toggleDevice('desktop')
+    appStore.toggleDevice('desktop')
   }
 })
 
 function handleClickOutside() {
-  useAppStore().closeSideBar({ withoutAnimation: false })
+  appStore.closeSideBar({ withoutAnimation: false })
 }
 
-const settingRef = ref(null);
+const settingRef = ref(null)
 function setLayout() {
-  settingRef.value.openSetting();
+  settingRef.value.openSetting()
 }
 </script>
 
@@ -72,6 +72,11 @@ function setLayout() {
   position: relative;
   height: 100%;
   width: 100%;
+  background:
+    radial-gradient(980px 420px at 0% 0%, rgba(20, 227, 255, 0.08), transparent 62%),
+    radial-gradient(780px 360px at 100% 0%, rgba(240, 74, 255, 0.08), transparent 58%),
+    var(--app-bg);
+  color: var(--text-primary);
 
   &.mobile.openSidebar {
     position: fixed;
@@ -85,13 +90,13 @@ function setLayout() {
 }
 
 .drawer-bg {
-  background: #000;
-  opacity: 0.3;
+  background: linear-gradient(145deg, rgba(2, 8, 24, 0.66), rgba(2, 8, 24, 0.72));
   width: 100%;
   top: 0;
   height: 100%;
   position: absolute;
   z-index: 999;
+  backdrop-filter: blur(2px);
 }
 
 .fixed-header {
@@ -100,7 +105,7 @@ function setLayout() {
   right: 0;
   z-index: 9;
   width: calc(100% - #{vars.$base-sidebar-width});
-  transition: width 0.28s;
+  transition: width 0.36s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .hideSidebar .fixed-header {

@@ -88,10 +88,15 @@ getBreadcrumb()
   display: inline-block;
   font-size: 14px;
   line-height: 50px;
+  color: var(--text-secondary);
 
   .no-redirect {
-    color: #97a8be;
+    color: var(--text-secondary);
     cursor: text;
+  }
+
+  a {
+    color: var(--text-primary);
   }
 }
 </style>

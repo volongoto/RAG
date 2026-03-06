@@ -94,3 +94,41 @@
 .el-dropdown .el-dropdown-link{
   color: var(--el-color-primary) !important;
 }
+
+.el-dropdown-menu,
+.el-select-dropdown,
+.el-picker-panel,
+.el-popover,
+.el-popper {
+  border: 1px solid var(--panel-border) !important;
+  background: var(--panel-bg) !important;
+  box-shadow: var(--panel-glow) !important;
+  backdrop-filter: var(--panel-glass);
+  -webkit-backdrop-filter: var(--panel-glass);
+}
+
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  background: color-mix(in srgb, var(--panel-bg) 86%, transparent) !important;
+  border: 1px solid var(--panel-border) !important;
+  box-shadow: none !important;
+}
+
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused,
+.el-textarea__inner:focus {
+  border-color: var(--accent-cyan) !important;
+  box-shadow: 0 0 0 2px rgba(20, 227, 255, 0.16) !important;
+}
+
+.el-button--default {
+  background: color-mix(in srgb, var(--panel-bg) 86%, transparent) !important;
+  border-color: var(--panel-border) !important;
+  color: var(--text-primary) !important;
+}
+
+.el-button--default:hover {
+  border-color: var(--accent-cyan) !important;
+  color: var(--accent-cyan) !important;
+}

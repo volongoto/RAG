@@ -1,10 +1,10 @@
 <template>
   <div class="navbar" :class="'nav' + settingsStore.navType">
     <hamburger id="hamburger-container" :is-active="appStore.sidebar.opened" class="hamburger-container" @toggleClick="toggleSideBar" />
-    <breadcrumb v-if="settingsStore.navType == 1" id="breadcrumb-container" class="breadcrumb-container" />
-    <top-nav v-if="settingsStore.navType == 2" id="topmenu-container" class="topmenu-container" />
-    <template v-if="settingsStore.navType == 3">
-      <logo v-show="settingsStore.sidebarLogo" :collapse="false"></logo>
+    <breadcrumb v-if="settingsStore.navType === 1" id="breadcrumb-container" class="breadcrumb-container" />
+    <top-nav v-if="settingsStore.navType === 2" id="topmenu-container" class="topmenu-container" />
+    <template v-if="settingsStore.navType === 3">
+      <logo v-show="settingsStore.sidebarLogo" :collapse="false" />
       <top-bar id="topbar-container" class="topbar-container" />
     </template>
 
@@ -25,7 +25,7 @@
         <el-tooltip content="主题模式" effect="dark" placement="bottom">
           <div class="right-menu-item hover-effect theme-switch-wrapper" @click="toggleTheme">
             <svg-icon v-if="settingsStore.isDark" icon-class="sunny" />
-            <svg-icon v-if="!settingsStore.isDark" icon-class="moon" />
+            <svg-icon v-else icon-class="moon" />
           </div>
         </el-tooltip>
 
@@ -34,19 +34,19 @@
         </el-tooltip>
       </template>
 
-      <el-dropdown @command="handleCommand" class="avatar-container right-menu-item hover-effect" trigger="hover">
+      <el-dropdown class="avatar-container right-menu-item hover-effect" trigger="hover" @command="handleCommand">
         <div class="avatar-wrapper">
           <img :src="userStore.avatar" class="user-avatar" />
-          <span class="user-nickname"> {{ userStore.nickName }} </span>
+          <span class="user-nickname">{{ userStore.nickName }}</span>
         </div>
         <template #dropdown>
           <el-dropdown-menu>
             <router-link to="/user/profile">
               <el-dropdown-item>个人中心</el-dropdown-item>
             </router-link>
-            <el-dropdown-item command="setLayout" v-if="settingsStore.showSettings">
-                <span>布局设置</span>
-              </el-dropdown-item>
+            <el-dropdown-item v-if="settingsStore.showSettings" command="setLayout">
+              <span>布局设置</span>
+            </el-dropdown-item>
             <el-dropdown-item divided command="logout">
               <span>退出登录</span>
             </el-dropdown-item>
@@ -83,10 +83,10 @@ function toggleSideBar() {
 
 function handleCommand(command) {
   switch (command) {
-    case "setLayout":
+    case 'setLayout':
       setLayout()
       break
-    case "logout":
+    case 'logout':
       logout()
       break
     default:
@@ -99,11 +99,13 @@ function logout() {
     confirmButtonText: '确定',
     cancelButtonText: '取消',
     type: 'warning'
-  }).then(() => {
-    userStore.logOut().then(() => {
-      location.href = '/index'
+  })
+    .then(() => {
+      userStore.logOut().then(() => {
+        location.href = '/index'
+      })
     })
-  }).catch(() => { })
+    .catch(() => {})
 }
 
 const emits = defineEmits(['setLayout'])
@@ -116,7 +118,7 @@ function toggleTheme() {
 }
 </script>
 
-<style lang='scss' scoped>
+<style lang="scss" scoped>
 .navbar.nav3 {
   .hamburger-container {
     display: none !important;
@@ -128,17 +130,29 @@ function toggleTheme() {
   overflow: hidden;
   position: relative;
   background: var(--navbar-bg);
-  box-shadow: 0 1px 4px rgba(0, 21, 41, 0.08);
+  color: var(--navbar-text);
+  border-bottom: 1px solid var(--panel-border);
+  box-shadow: 0 10px 24px rgba(4, 12, 28, 0.24);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   display: flex;
   align-items: center;
-  // padding: 0 8px;
   box-sizing: border-box;
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: auto 0 0 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(20, 227, 255, 0.58), transparent);
+    pointer-events: none;
+  }
 
   .hamburger-container {
     line-height: 46px;
     height: 100%;
     cursor: pointer;
-    transition: background 0.3s;
+    transition: background 0.24s ease, box-shadow 0.24s ease;
     -webkit-tap-highlight-color: transparent;
     display: flex;
     align-items: center;
@@ -146,7 +160,8 @@ function toggleTheme() {
     margin-right: 8px;
 
     &:hover {
-      background: rgba(0, 0, 0, 0.025);
+      background: var(--navbar-hover);
+      box-shadow: inset 0 0 0 1px rgba(20, 227, 255, 0.2);
     }
   }
 
@@ -168,11 +183,6 @@ function toggleTheme() {
     margin-left: 8px;
   }
 
-  .errLog-container {
-    display: inline-block;
-    vertical-align: top;
-  }
-
   .right-menu {
     height: 100%;
     line-height: 50px;
@@ -189,15 +199,17 @@ function toggleTheme() {
       padding: 0 8px;
       height: 100%;
       font-size: 18px;
-      color: #5a5e66;
+      color: var(--navbar-text);
       vertical-align: text-bottom;
 
       &.hover-effect {
         cursor: pointer;
-        transition: background 0.3s;
+        transition: background 0.28s ease, color 0.28s ease, box-shadow 0.28s ease;
 
         &:hover {
-          background: rgba(0, 0, 0, 0.025);
+          background: var(--navbar-hover);
+          color: var(--accent-cyan);
+          box-shadow: inset 0 0 0 1px rgba(20, 227, 255, 0.2);
         }
       }
 
@@ -206,23 +218,25 @@ function toggleTheme() {
         align-items: center;
 
         svg {
-          transition: transform 0.3s;
-          
+          transition: transform 0.3s ease, filter 0.3s ease;
+
           &:hover {
-            transform: scale(1.15);
+            transform: scale(1.14);
+            filter: drop-shadow(0 0 6px rgba(20, 227, 255, 0.6));
           }
         }
       }
     }
 
     .avatar-container {
-      margin-right: 0px;
-      padding-right: 0px;
+      margin-right: 0;
+      padding-right: 0;
 
       .avatar-wrapper {
         margin-top: 10px;
         right: 8px;
         position: relative;
+        color: var(--text-primary);
 
         .user-avatar {
           cursor: pointer;
@@ -231,23 +245,15 @@ function toggleTheme() {
           margin-right: 8px;
           border-radius: 50%;
           vertical-align: middle;
-          border-style: none;
+          border: 1px solid rgba(20, 227, 255, 0.35);
+          box-shadow: 0 0 10px rgba(20, 227, 255, 0.34);
         }
 
-        .user-nickname{
+        .user-nickname {
           position: relative;
-          left: 0px;
-          // bottom: 10px;
+          left: 0;
           font-size: 14px;
-          font-weight: bold;
-        }
-
-        i {
-          cursor: pointer;
-          position: absolute;
-          right: -20px;
-          top: 25px;
-          font-size: 12px;
+          font-weight: 700;
         }
       }
     }

@@ -87,8 +87,7 @@ function isActive(r) {
 function activeStyle(tag) {
   if (!isActive(tag)) return {};
   return {
-    "background-color": theme.value,
-    "border-color": theme.value
+    "--tag-active-color": theme.value
   };
 }
 function isAffix(tag) {
@@ -245,7 +244,9 @@ function handleScroll() {
   width: 100%;
   background: var(--tags-bg, #fff);
   border-bottom: 1px solid var(--tags-item-border, #d8dce5);
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, .12), 0 0 3px 0 rgba(0, 0, 0, .04);
+  box-shadow: 0 8px 18px rgba(5, 12, 25, 0.14);
+  backdrop-filter: blur(8px);
+
   .tags-view-wrapper {
     .tags-view-item {
       display: inline-block;
@@ -260,6 +261,13 @@ function handleScroll() {
       font-size: 12px;
       margin-left: 5px;
       margin-top: 4px;
+      border-radius: 8px;
+      transition: all 0.22s ease;
+
+      &:hover {
+        border-color: rgba(20, 227, 255, 0.45);
+        color: var(--text-primary);
+      }
 
       &:first-of-type {
         margin-left: 15px;
@@ -270,13 +278,15 @@ function handleScroll() {
       }
 
       &.active {
-        background-color: #42b983;
+        background:
+          linear-gradient(90deg, color-mix(in srgb, var(--tag-active-color, #14e3ff) 70%, transparent), rgba(58, 123, 255, 0.36), rgba(240, 74, 255, 0.3));
         color: #fff;
-        border-color: #42b983;
+        border-color: color-mix(in srgb, var(--tag-active-color, #14e3ff) 70%, white);
+        box-shadow: 0 0 12px rgba(20, 227, 255, 0.35);
 
         &::before {
           content: '';
-          background: #fff;
+          background: #bdf6ff;
           display: inline-block;
           width: 8px;
           height: 8px;
@@ -303,7 +313,7 @@ function handleScroll() {
     font-size: 12px;
     font-weight: 400;
     color: var(--tags-item-text, #333);
-    box-shadow: 2px 2px 3px 0 rgba(0, 0, 0, .3);
+    box-shadow: 0 12px 26px rgba(0, 0, 0, .3);
     border: 1px solid var(--el-border-color-light, #e4e7ed);
 
     li {

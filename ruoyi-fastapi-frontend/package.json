@@ -29,6 +29,7 @@
     "element-plus": "2.10.7",
     "file-saver": "2.0.5",
     "fuse.js": "6.6.2",
+    "gsap": "^3.13.0",
     "js-beautify": "1.15.1",
     "js-cookie": "3.0.5",
     "jsencrypt": "3.3.2",
