@@ -155,9 +155,11 @@ class ChunkSplitter:
                 overlap_content.insert(0, content)
                 total_size += content_size
             else:
-                remaining = self.chunk_overlap - total_size
-                if remaining > 0:
-                    overlap_content.insert(0, content[-remaining:])
+                # Keep overlap at paragraph granularity. Avoid taking a
+                # character-level suffix which splits one paragraph into
+                # two incomplete pieces.
+                if not overlap_content:
+                    overlap_content.insert(0, content)
                 break
 
         return overlap_content

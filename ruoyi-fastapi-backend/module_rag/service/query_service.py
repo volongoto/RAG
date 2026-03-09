@@ -28,6 +28,8 @@ class QueryService:
             kb_ids=query_request.kb_ids,
             top_k=query_request.top_k,
             retrieval_mode=query_request.retrieval_mode,
+            scenario=query_request.scenario,
+            answer_mode=query_request.answer_mode,
         )
         await self._save_query_log(query_db, query_request, result, user_id, start_time)
         return QueryResponseModel(**CamelCaseUtil.transform_result(result))

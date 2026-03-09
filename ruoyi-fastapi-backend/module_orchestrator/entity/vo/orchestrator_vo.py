@@ -19,7 +19,7 @@ class OrchestratorChatRequestModel(OrchestratorContextModel):
     message: str = Field(description='User message')
     kb_ids: list[int] = Field(description='Knowledge base IDs')
     stream: bool = Field(default=False, description='Whether to stream response')
-    top_k: int = Field(default=5, description='Top K retrieval')
+    top_k: int = Field(default=10, ge=1, le=50, description='Top K retrieval')
     retrieval_mode: Literal['vector', 'lexical', 'hybrid'] = Field(default='hybrid', description='Retrieval mode')
     include_source: bool = Field(default=True, description='Include source chunks')
 

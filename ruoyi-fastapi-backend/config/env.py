@@ -156,6 +156,12 @@ class RAGSettings(BaseSettings):
     rag_chunk_overlap: int = 50
     rag_top_k: int = 5
     rag_similarity_threshold: float = 0.7
+    rag_security_brief_enabled: bool = False
+    rag_security_brief_scenario_markers: str = 'national-security,intel,intelligence,国安,情报,安全风险'
+    rag_security_brief_query_markers: str = '国安,情报,安全风险,反间谍,克格勃,渗透,泄密'
+    rag_era_mismatch_guard_enabled: bool = False
+    rag_era_mismatch_left_markers: str = 'kgb,克格勃'
+    rag_era_mismatch_right_markers: str = '韦小宝,鹿鼎记,康熙,清朝'
 
 
 class CachePathConfig:

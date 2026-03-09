@@ -147,12 +147,13 @@ class QueryRequestModel(BaseModel):
 
     kb_ids: list[int] = Field(default=None, description='Knowledge base ID list')
     query_text: str = Field(default=None, description='Query text')
-    top_k: Optional[int] = Field(default=5, description='Top K results')
+    top_k: Optional[int] = Field(default=10, ge=1, le=50, description='Top K results')
     include_source: Optional[bool] = Field(default=True, description='Include source chunks')
     session_id: str = Field(description='Session ID')
     scenario: str = Field(description='Scenario')
     locale: str = Field(description='Locale')
     retrieval_mode: Literal['vector', 'lexical', 'hybrid'] = Field(default='hybrid', description='Retrieval mode')
+    answer_mode: Literal['concise', 'detailed'] = Field(default='detailed', description='Answer mode')
 
 
 class SourceChunkModel(BaseModel):

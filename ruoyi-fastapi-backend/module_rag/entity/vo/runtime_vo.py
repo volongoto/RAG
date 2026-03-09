@@ -26,7 +26,7 @@ class RetrieveRequestModel(RuntimeContextModel):
 
     kb_ids: list[int] = Field(description='Knowledge base IDs')
     query_text: str = Field(description='User query')
-    top_k: Optional[int] = Field(default=5, description='Top K')
+    top_k: Optional[int] = Field(default=10, ge=1, le=50, description='Top K')
     retrieval_mode: Literal['vector', 'lexical', 'hybrid'] = Field(default='hybrid', description='Retrieval mode')
 
 

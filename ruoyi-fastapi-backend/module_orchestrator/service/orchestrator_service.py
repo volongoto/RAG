@@ -250,7 +250,7 @@ class OrchestratorService:
                 message=task_message,
                 kbIds=kb_ids,
                 stream=False,
-                topK=int(payload.payload.get('topK') or 5),
+                topK=int(payload.payload.get('topK') or 10),
                 retrievalMode=payload.payload.get('retrievalMode')
                 or payload.payload.get('retrieval_mode')
                 or 'hybrid',
