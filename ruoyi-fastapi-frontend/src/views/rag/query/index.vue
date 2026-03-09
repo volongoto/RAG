@@ -97,6 +97,7 @@ const answerText = ref('');
 const responseTime = ref(0);
 const sourceChunks = ref([]);
 const activeChunks = ref([]);
+const sessionId = ref(`rag-ui-${Date.now()}`);
 
 function getKbTree() {
   getKnowledgeBaseTree().then(response => {
@@ -131,7 +132,11 @@ async function handleQuery() {
       kbIds: selectedKbIds.value,
       queryText: queryText.value,
       topK: 5,
-      includeSource: true
+      includeSource: true,
+      sessionId: sessionId.value,
+      scenario: 'rag-query-ui',
+      locale: 'zh-CN',
+      retrievalMode: 'hybrid'
     });
     
     answerText.value = response.data.answerText;
