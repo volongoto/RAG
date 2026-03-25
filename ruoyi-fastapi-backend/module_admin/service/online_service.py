@@ -2,6 +2,7 @@ from typing import Any
 
 import jwt
 from fastapi import Request
+from jwt.exceptions import InvalidTokenError
 
 from common.enums import RedisInitKeyConfig
 from common.vo import CrudResponseModel
@@ -30,8 +31,14 @@ class OnlineService:
             access_token_keys = []
         access_token_values_list = [await request.app.state.redis.get(key) for key in access_token_keys]
         online_info_list = []
-        for item in access_token_values_list:
-            payload = jwt.decode(item, JwtConfig.jwt_secret_key, algorithms=[JwtConfig.jwt_algorithm])
+        for key, item in zip(access_token_keys, access_token_values_list):
+            if not item:
+                continue
+            try:
+                payload = jwt.decode(item, JwtConfig.jwt_secret_key, algorithms=[JwtConfig.jwt_algorithm])
+            except InvalidTokenError:
+                await request.app.state.redis.delete(key)
+                continue
             online_dict = {
                 'token_id': payload.get('session_id') if AppConfig.app_same_time_login else payload.get('user_id'),
                 'user_name': payload.get('user_name'),

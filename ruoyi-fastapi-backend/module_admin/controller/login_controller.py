@@ -4,6 +4,7 @@ from typing import Annotated, Optional
 
 import jwt
 from fastapi import Depends, Request, Response
+from jwt.exceptions import InvalidTokenError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.annotation.log_annotation import Log
@@ -169,14 +170,19 @@ async def register_user(
     response_model=ResponseBaseModel,
 )
 async def logout(request: Request, token: Annotated[Optional[str], Depends(oauth2_scheme)]) -> Response:
-    payload = jwt.decode(
-        token, JwtConfig.jwt_secret_key, algorithms=[JwtConfig.jwt_algorithm], options={'verify_exp': False}
-    )
+    try:
+        payload = jwt.decode(
+            token, JwtConfig.jwt_secret_key, algorithms=[JwtConfig.jwt_algorithm], options={'verify_exp': False}
+        )
+    except InvalidTokenError:
+        logger.warning('Logout received an invalid or stale token; treating request as already logged out')
+        return ResponseUtil.success(msg='退出成功')
     if AppConfig.app_same_time_login:
         token_id: str = payload.get('session_id')
     else:
         token_id: str = payload.get('user_id')
-    await LoginService.logout_services(request, token_id)
+    if token_id:
+        await LoginService.logout_services(request, token_id)
     logger.info('退出成功')
 
     return ResponseUtil.success(msg='退出成功')

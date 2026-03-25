@@ -44,7 +44,7 @@ async def orchestrator_chat(
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
 ) -> Response:
-    service = OrchestratorService()
+    service = OrchestratorService(getattr(request.app.state, 'redis', None))
     meta = build_request_meta(request, current_user)
 
     if payload.stream:
@@ -79,11 +79,11 @@ async def create_orchestrator_task(
 ) -> Response:
     await IdempotencyUtil.require_and_lock_key(
         request,
-        scope='orchestrator:tasks',
+        scope=f'orchestrator:tasks:{current_user.user.user_id}',
         key=idempotency_key,
         ttl_seconds=3600,
     )
-    service = OrchestratorService()
+    service = OrchestratorService(getattr(request.app.state, 'redis', None))
     meta = build_request_meta(request, current_user)
     task = await service.create_task(current_user.user.user_id, meta, payload)
     logger.info(f'Orchestrator task created: {task.task_id}')
@@ -100,9 +100,11 @@ async def create_orchestrator_task(
 async def get_orchestrator_task(
     request: Request,
     task_id: Annotated[str, Path(description='Task ID')],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
 ) -> Response:
-    service = OrchestratorService()
-    task = await service.get_task(task_id)
+    service = OrchestratorService(getattr(request.app.state, 'redis', None))
+    meta = build_request_meta(request, current_user)
+    task = await service.get_task(task_id, current_user.user.user_id, meta.tenant_id, current_user.user.admin)
     if not task:
         raise ServiceException(message='Task not found')
     return ResponseUtil.success(data=task)
@@ -118,7 +120,14 @@ async def get_orchestrator_task(
 async def get_orchestrator_session(
     request: Request,
     session_id: Annotated[str, Path(description='Session ID')],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
 ) -> Response:
-    service = OrchestratorService()
-    session = await service.get_session(session_id)
+    service = OrchestratorService(getattr(request.app.state, 'redis', None))
+    meta = build_request_meta(request, current_user)
+    session = await service.get_session(
+        session_id,
+        current_user.user.user_id,
+        meta.tenant_id,
+        current_user.user.admin,
+    )
     return ResponseUtil.success(data=session)

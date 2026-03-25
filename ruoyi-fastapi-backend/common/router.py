@@ -15,6 +15,8 @@ from starlette.routing import BaseRoute
 from starlette.types import ASGIApp, Lifespan
 from typing_extensions import deprecated
 
+from utils.log_util import logger
+
 
 class APIRouterPro(APIRouter):
     """
@@ -351,7 +353,7 @@ class RouterRegister:
             except Exception as e:
                 error_summary = f'{type(e).__name__}: {e}'
                 import_failures.append((module_name, error_summary))
-                print(f'Error importing module {module_name}: {error_summary}')
+                logger.exception(f'Failed to import router module {module_name}: {error_summary}')
         return routers, import_failures
 
     def _sort_routers(self, routers: list[tuple[str, APIRouter]]) -> list[tuple[str, APIRouter]]:
@@ -393,18 +395,19 @@ class RouterRegister:
         controller_files = self._find_controller_files()
         # 导入模块并获取路由实例
         routers, import_failures = self._import_module_and_get_routers(controller_files)
+        if import_failures:
+            failed_modules = ', '.join(module_name for module_name, _error_summary in import_failures)
+            raise RuntimeError(f'Router auto-registration failed for modules: {failed_modules}')
         # 按规则排序路由
         sorted_routers = self._sort_routers(routers)
         # 注册路由到FastAPI应用
         self._register_routers_to_app(sorted_routers)
-        print(
+        logger.info(
             'Router auto-register summary: '
             f'scanned_files={len(controller_files)}, '
             f'registered_routers={len(sorted_routers)}, '
             f'import_failures={len(import_failures)}'
         )
-        for module_name, error_summary in import_failures:
-            print(f'Router import failure detail: module={module_name}, error={error_summary}')
 
 
 def auto_register_routers(app: FastAPI) -> None:

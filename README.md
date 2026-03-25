@@ -1,5 +1,3 @@
-<<<<<<< README.md
-
 ## 平台简介
 
 RuoYi-Vue3-FastAPI是一套全部开源的快速开发平台，毫无保留给个人及企业免费使用。
@@ -62,7 +60,6 @@ ruoyi-fastapi-backend/
 │   │   ├── do/         # 数据对象
 │   │   └── vo/         # 视图对象
 │   └── service/         # 服务层
-├── module_generator/      # 代码生成模块
 ├── module_task/           # 定时任务模块
 ├── sql/                  # SQL 脚本
 ├── sub_applications/      # 子应用
@@ -161,7 +158,6 @@ ruoyi-fastapi-backend/
 14. 缓存监控：对系统的缓存信息查询，命令统计等。
 15. 在线构建器：拖动表单元素生成相应的HTML代码。
 16. 系统接口：根据业务代码自动生成相关的api接口文档。
-17. 代码生成：配置数据库表信息一键生成前后端代码（python、sql、vue、js），支持下载。
 
 ## 项目开发及发布相关
 
@@ -201,10 +197,10 @@ cd ruoyi-fastapi-backend
 pip3 install -r requirements.txt
 
 # 配置环境
-在.env.dev文件中配置开发环境的数据库和redis
+参考`.env.dev.example`创建本地`.env.dev`，并配置开发环境的数据库和redis
 
 # 运行sql文件
-1.新建数据库ruoyi-fastapi(默认，可修改)
+1.新建数据库cradle-fastapi(默认，可修改)
 2.使用命令或数据库连接工具运行sql文件夹下的ruoyi-fastapi-pg.sql
 
 # 运行后端
@@ -219,7 +215,7 @@ python3 app.py --env=dev
 密码：admin123
 
 # 浏览器访问
-地址：http://localhost:80
+地址：http://localhost:18080
 ```
 
 ### 发布
@@ -238,7 +234,7 @@ npm run build:prod 或 yarn build:prod
 
 ```bash
 # 配置环境
-在.env.prod文件中配置生产环境的数据库和redis
+参考`.env.prod.example`创建本地`.env.prod`，并配置生产环境的数据库和redis
 
 # 运行后端
 python3 app.py --env=prod
@@ -251,4 +247,3 @@ python3 app.py --env=prod
 ```bash
 docker compose up -d --build
 ```
-

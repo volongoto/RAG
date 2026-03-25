@@ -263,7 +263,6 @@ insert into sys_menu values(112,  '服务监控', 2,   '4', 'server',     'monit
 insert into sys_menu values(113,  '缓存监控', 2,   '5', 'cache',      'monitor/cache/index',      '', '', 1, 0, 'C', '0', '0', 'monitor:cache:list',      'redis',         'admin', current_timestamp, '', null, '缓存监控菜单');
 insert into sys_menu values(114,  '缓存列表', 2,   '6', 'cacheList',  'monitor/cache/list',       '', '', 1, 0, 'C', '0', '0', 'monitor:cache:list',      'redis-list',    'admin', current_timestamp, '', null, '缓存列表菜单');
 insert into sys_menu values(115,  '表单构建', 3,   '1', 'build',      'tool/build/index',         '', '', 1, 0, 'C', '0', '0', 'tool:build:list',         'build',         'admin', current_timestamp, '', null, '表单构建菜单');
-insert into sys_menu values(116,  '代码生成', 3,   '2', 'gen',        'tool/gen/index',           '', '', 1, 0, 'C', '0', '0', 'tool:gen:list',           'code',          'admin', current_timestamp, '', null, '代码生成菜单');
 insert into sys_menu values(117,  '系统接口', 3,   '3', 'swagger',    'tool/swagger/index',       '', '', 1, 0, 'C', '0', '0', 'tool:swagger:list',       'swagger',       'admin', current_timestamp, '', null, '系统接口菜单');
 -- 三级菜单
 insert into sys_menu values(500,  '操作日志', 108, '1', 'operlog',    'monitor/operlog/index',    '', '', 1, 0, 'C', '0', '0', 'monitor:operlog:list',    'form',          'admin', current_timestamp, '', null, '操作日志菜单');
@@ -335,14 +334,6 @@ insert into sys_menu values(1051, '任务修改', 110, '3', '#', '', '', '', 1, 
 insert into sys_menu values(1052, '任务删除', 110, '4', '#', '', '', '', 1, 0, 'F', '0', '0', 'monitor:job:remove',         '#', 'admin', current_timestamp, '', null, '');
 insert into sys_menu values(1053, '状态修改', 110, '5', '#', '', '', '', 1, 0, 'F', '0', '0', 'monitor:job:changeStatus',   '#', 'admin', current_timestamp, '', null, '');
 insert into sys_menu values(1054, '任务导出', 110, '6', '#', '', '', '', 1, 0, 'F', '0', '0', 'monitor:job:export',         '#', 'admin', current_timestamp, '', null, '');
--- 代码生成按钮
-insert into sys_menu values(1055, '生成查询', 116, '1', '#', '', '', '', 1, 0, 'F', '0', '0', 'tool:gen:query',             '#', 'admin', current_timestamp, '', null, '');
-insert into sys_menu values(1056, '生成修改', 116, '2', '#', '', '', '', 1, 0, 'F', '0', '0', 'tool:gen:edit',              '#', 'admin', current_timestamp, '', null, '');
-insert into sys_menu values(1057, '生成删除', 116, '3', '#', '', '', '', 1, 0, 'F', '0', '0', 'tool:gen:remove',            '#', 'admin', current_timestamp, '', null, '');
-insert into sys_menu values(1058, '导入代码', 116, '4', '#', '', '', '', 1, 0, 'F', '0', '0', 'tool:gen:import',            '#', 'admin', current_timestamp, '', null, '');
-insert into sys_menu values(1059, '预览代码', 116, '5', '#', '', '', '', 1, 0, 'F', '0', '0', 'tool:gen:preview',           '#', 'admin', current_timestamp, '', null, '');
-insert into sys_menu values(1060, '生成代码', 116, '6', '#', '', '', '', 1, 0, 'F', '0', '0', 'tool:gen:code',              '#', 'admin', current_timestamp, '', null, '');
-
 -- ----------------------------
 -- 6、用户和角色关联表  用户N-1角色
 -- ----------------------------
@@ -856,112 +847,6 @@ comment on table sys_notice is '通知公告表';
 -- ----------------------------
 insert into sys_notice values(1, '温馨提醒：2018-07-01 vfadmin新版本发布啦', '2', '新版本内容', '0', 'admin', current_timestamp, '', null, '管理员');
 insert into sys_notice values(2, '维护通知：2018-07-01 vfadmin系统凌晨维护', '1', '维护内容',   '0', 'admin', current_timestamp, '', null, '管理员');
-
--- ----------------------------
--- 18、代码生成业务表
--- ----------------------------
-drop table if exists gen_table;
-create table gen_table (
-    table_id bigserial not null,
-    table_name varchar(200) default '',
-    table_comment varchar(500) default '',
-    sub_table_name varchar(64) default null,
-    sub_table_fk_name varchar(64) default null,
-    class_name varchar(100) default '',
-    tpl_category varchar(200) default 'crud',
-    tpl_web_type varchar(30)  default '',
-    package_name varchar(100),
-    module_name varchar(30),
-    business_name varchar(30),
-    function_name varchar(50),
-    function_author varchar(50),
-    gen_type char(1) default '0',
-    gen_path varchar(200) default '/',
-    options varchar(1000),
-    create_by varchar(64) default '',
-    create_time timestamp(0),
-    update_by varchar(64) default '',
-    update_time timestamp(0),
-    remark varchar(500) default null,
-    primary key (table_id)
-);
-comment on column gen_table.table_id is '编号';
-comment on column gen_table.table_name is '表名称';
-comment on column gen_table.table_comment is '表描述';
-comment on column gen_table.sub_table_name is '关联子表的表名';
-comment on column gen_table.sub_table_fk_name is '子表关联的外键名';
-comment on column gen_table.class_name is '实体类名称';
-comment on column gen_table.tpl_category is '使用的模板（crud单表操作 tree树表操作）';
-comment on column gen_table.tpl_web_type is '前端模板类型（element-ui模版 element-plus模版）';
-comment on column gen_table.package_name is '生成包路径';
-comment on column gen_table.module_name is '生成模块名';
-comment on column gen_table.business_name is '生成业务名';
-comment on column gen_table.function_name is '生成功能名';
-comment on column gen_table.function_author is '生成功能作者';
-comment on column gen_table.gen_type is '生成代码方式（0zip压缩包 1自定义路径）';
-comment on column gen_table.gen_path is '生成路径（不填默认项目路径）';
-comment on column gen_table.options is '其它生成选项';
-comment on column gen_table.create_by is '创建者';
-comment on column gen_table.create_time is '创建时间';
-comment on column gen_table.update_by is '更新者';
-comment on column gen_table.update_time is '更新时间';
-comment on column gen_table.remark is '备注';
-comment on table gen_table is '代码生成业务表';
-
--- ----------------------------
--- 19、代码生成业务表字段
--- ----------------------------
-drop table if exists gen_table_column;
-create table gen_table_column (
-    column_id bigserial not null,
-    table_id bigint,
-    column_name varchar(200),
-    column_comment varchar(500),
-    column_type varchar(100),
-    python_type varchar(500),
-    python_field varchar(200),
-    is_pk char(1),
-    is_increment char(1),
-    is_required char(1),
-    is_unique char(1),
-    is_insert char(1),
-    is_edit char(1),
-    is_list char(1),
-    is_query char(1),
-    query_type varchar(200) default 'EQ',
-    html_type varchar(200),
-    dict_type varchar(200) default '',
-    sort int4,
-    create_by varchar(64) default '',
-    create_time timestamp(0),
-    update_by varchar(64) default '',
-    update_time timestamp(0),
-    primary key (column_id)
-);
-comment on column gen_table_column.column_id is '编号';
-comment on column gen_table_column.table_id is '归属表编号';
-comment on column gen_table_column.column_name is '列名称';
-comment on column gen_table_column.column_comment is '列描述';
-comment on column gen_table_column.column_type is '列类型';
-comment on column gen_table_column.python_type is 'PYTHON类型';
-comment on column gen_table_column.python_field is 'PYTHON字段名';
-comment on column gen_table_column.is_pk is '是否主键（1是）';
-comment on column gen_table_column.is_increment is '是否自增（1是）';
-comment on column gen_table_column.is_required is '是否必填（1是）';
-comment on column gen_table_column.is_unique is '是否唯一（1是）';
-comment on column gen_table_column.is_insert is '是否为插入字段（1是）';
-comment on column gen_table_column.is_edit is '是否编辑字段（1是）';
-comment on column gen_table_column.is_list is '是否列表字段（1是）';
-comment on column gen_table_column.is_query is '是否查询字段（1是）';
-comment on column gen_table_column.query_type is '查询方式（等于、不等于、大于、小于、范围）';
-comment on column gen_table_column.html_type is '显示类型（文本框、文本域、下拉框、复选框、单选框、日期控件）';
-comment on column gen_table_column.dict_type is '字典类型';
-comment on column gen_table_column.sort is '排序';
-comment on column gen_table_column.create_by is '创建者';
-comment on column gen_table_column.create_time is '创建时间';
-comment on column gen_table_column.update_by is '更新者';
-comment on column gen_table_column.update_time is '更新时间';
-comment on table gen_table_column is '代码生成业务表字段';
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)
     RETURNS "pg_catalog"."bool" AS $BODY$

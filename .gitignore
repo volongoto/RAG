@@ -106,6 +106,9 @@ celerybeat.pid
 
 # Environments
 .env
+ruoyi-fastapi-backend/.env
+ruoyi-fastapi-backend/.env.*
+!ruoyi-fastapi-backend/.env*.example
 .venv
 env/
 venv/

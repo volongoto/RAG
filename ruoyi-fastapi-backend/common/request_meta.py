@@ -38,10 +38,11 @@ def build_request_meta(request: Request, current_user: CurrentUserModel | None =
     authorization = request.headers.get('Authorization', '')
     tenant_id = request.headers.get('X-Tenant-Id', '').strip() or 'default'
 
-    header_user_id = request.headers.get('X-User-Id', '').strip()
-    user_id = header_user_id
-    if not user_id and current_user is not None:
+    user_id = ''
+    if current_user is not None:
         user_id = str(current_user.user.user_id)
+    if not user_id:
+        user_id = request.headers.get('X-User-Id', '').strip()
     user_id = user_id or 'anonymous'
 
     request_id = request.headers.get('X-Request-Id', '').strip()

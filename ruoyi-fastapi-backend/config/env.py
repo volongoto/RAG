@@ -15,10 +15,10 @@ class AppSettings(BaseSettings):
     """
 
     app_env: str = 'dev'
-    app_name: str = 'RuoYi-FasAPI'
+    app_name: str = 'Cradle-FastAPI'
     app_root_path: str = '/dev-api'
     app_host: str = '0.0.0.0'
-    app_port: int = 9099
+    app_port: int = 29099
     app_version: str = '1.0.0'
     app_reload: bool = True
     app_ip_location_query: bool = True
@@ -30,7 +30,7 @@ class JwtSettings(BaseSettings):
     Jwt配置
     """
 
-    jwt_secret_key: str = 'b01c66dc2c58dc6a0aabfe2144256be36226de378bf87f72c0c795dda67f4d55'
+    jwt_secret_key: str = 'replace-with-a-strong-secret'
     jwt_algorithm: str = 'HS256'
     jwt_expire_minutes: int = 1440
     jwt_redis_expire_minutes: int = 30
@@ -41,12 +41,12 @@ class DataBaseSettings(BaseSettings):
     数据库配置
     """
 
-    db_type: Literal['mysql', 'postgresql'] = 'mysql'
+    db_type: Literal['mysql', 'postgresql'] = 'postgresql'
     db_host: str = '127.0.0.1'
-    db_port: int = 3306
-    db_username: str = 'root'
-    db_password: str = 'mysqlroot'
-    db_database: str = 'ruoyi-fastapi'
+    db_port: int = 54322
+    db_username: str = 'postgres'
+    db_password: str = 'root'
+    db_database: str = 'cradle-fastapi'
     db_echo: bool = True
     db_max_overflow: int = 10
     db_pool_size: int = 50
@@ -71,24 +71,6 @@ class RedisSettings(BaseSettings):
     redis_username: str = ''
     redis_password: str = ''
     redis_database: int = 2
-
-
-class GenSettings:
-    """
-    代码生成配置
-    """
-
-    author = 'insistence'
-    package_name = 'module_admin.system'
-    auto_remove_pre = False
-    table_prefix = 'sys_'
-    allow_overwrite = False
-
-    GEN_PATH = 'vf_admin/gen_path'
-
-    def __init__(self) -> None:
-        if not os.path.exists(self.GEN_PATH):
-            os.makedirs(self.GEN_PATH)
 
 
 class UploadSettings:
@@ -164,6 +146,17 @@ class RAGSettings(BaseSettings):
     rag_era_mismatch_right_markers: str = '韦小宝,鹿鼎记,康熙,清朝'
 
 
+class InternalRagBridgeSettings(BaseSettings):
+    rag_internal_shared_secret: str = ''
+    rag_internal_allowed_source_systems: str = 'ksguoaj-google'
+    rag_external_user_map: str = '{}'
+    rag_external_user_name_map: str = '{}'
+    rag_external_dept_map: str = '{}'
+    rag_internal_allow_direct_user_id_fallback: bool = True
+    rag_internal_allow_direct_dept_id_fallback: bool = True
+    rag_internal_signature_ttl_seconds: int = 300
+
+
 class CachePathConfig:
     """
     缓存目录配置
@@ -209,13 +202,6 @@ class GetConfig:
         # 实例化Redis配置模型
         return RedisSettings()
 
-    def get_gen_config(self) -> GenSettings:
-        """
-        获取代码生成配置
-        """
-        # 实例化代码生成配置
-        return GenSettings()
-
     def get_upload_config(self) -> UploadSettings:
         """
         获取上传配置
@@ -228,6 +214,12 @@ class GetConfig:
         获取RAG配置
         """
         return RAGSettings()
+
+    def get_internal_rag_bridge_config(self) -> InternalRagBridgeSettings:
+        """
+        获取内部RAG桥接配置
+        """
+        return InternalRagBridgeSettings()
 
     @staticmethod
     def parse_cli_args() -> None:
@@ -261,7 +253,10 @@ class GetConfig:
         if run_env != '':
             env_file = f'.env.{run_env}'
         # 加载配置
-        load_dotenv(env_file)
+        for candidate in (env_file, f'{env_file}.example'):
+            if os.path.exists(candidate):
+                load_dotenv(candidate)
+                break
 
 
 # 实例化获取配置类
@@ -274,9 +269,9 @@ JwtConfig = get_config.get_jwt_config()
 DataBaseConfig = get_config.get_database_config()
 # Redis配置
 RedisConfig = get_config.get_redis_config()
-# 代码生成配置
-GenConfig = get_config.get_gen_config()
 # 上传配置
 UploadConfig = get_config.get_upload_config()
 # RAG配置
 RAGConfig = get_config.get_rag_config()
+# 内部RAG桥接配置
+InternalRagBridgeConfig = get_config.get_internal_rag_bridge_config()

@@ -22,7 +22,7 @@
 
 | 场景 | 示例地址 |
 |---|---|
-| 直连后端 | `http://{host}:9099` |
+| 直连后端 | `http://{host}:29099` |
 | 开发环境代理 | `http://{host}/dev-api` |
 | 生产环境代理 | `http://{host}/prod-api` |
 | Docker 前端代理 | `http://{host}/docker-api` |
@@ -145,6 +145,7 @@
 {
   "sessionId": "s-001",
   "requestId": "req-001",
+  "traceId": "trace-001",
   "finalAnswer": "审批流程分为发起、部门审核、法务复核、归档。",
   "citations": [
     {
@@ -166,6 +167,45 @@
     {"tool": "rag.retrieve", "status": "success", "latencyMs": 120, "summary": "returned 10 chunks"},
     {"tool": "rag.query", "status": "success", "latencyMs": 890, "summary": "answer generated"}
   ],
+  "traceEvents": [
+    {
+      "eventId": "evt-1",
+      "requestId": "req-001",
+      "traceId": "trace-001",
+      "sessionId": "s-001",
+      "taskId": null,
+      "stepKey": "request.accepted",
+      "stepLabel": "接收请求",
+      "status": "success",
+      "startTime": "2026-03-10T10:00:00",
+      "endTime": "2026-03-10T10:00:00",
+      "latencyMs": 0,
+      "summary": "request accepted",
+      "meta": {
+        "stream": false,
+        "topK": 10,
+        "retrievalMode": "hybrid"
+      }
+    },
+    {
+      "eventId": "evt-2",
+      "requestId": "req-001",
+      "traceId": "trace-001",
+      "sessionId": "s-001",
+      "taskId": null,
+      "stepKey": "rag.retrieve",
+      "stepLabel": "知识检索",
+      "status": "success",
+      "startTime": "2026-03-10T10:00:00",
+      "endTime": "2026-03-10T10:00:00",
+      "latencyMs": 120,
+      "summary": "returned 10 chunks",
+      "meta": {
+        "chunkCount": 10,
+        "responseTime": 95
+      }
+    }
+  ],
   "latencyMs": 1040
 }
 ```
@@ -176,14 +216,21 @@
 - 消息格式（事件类型在 JSON 的 `event` 字段）：
 
 ```text
-data: {"event":"tool","data":{"tool":"rag.retrieve","status":"success","latencyMs":120,"summary":"returned 10 chunks"}}
+data: {"event":"step","data":{"eventId":"evt-1","requestId":"req-001","traceId":"trace-001","sessionId":"s-001","taskId":null,"stepKey":"request.accepted","stepLabel":"接收请求","status":"started","startTime":"2026-03-10T10:00:00","endTime":null,"latencyMs":null,"summary":"request accepted","meta":{"stream":true,"topK":10,"retrievalMode":"hybrid"}}}
 
-data: {"event":"token","data":"审"}
+data: {"event":"step","data":{"eventId":"evt-2","requestId":"req-001","traceId":"trace-001","sessionId":"s-001","taskId":null,"stepKey":"rag.retrieve","stepLabel":"知识检索","status":"success","startTime":"2026-03-10T10:00:00","endTime":"2026-03-10T10:00:00","latencyMs":120,"summary":"returned 10 chunks","meta":{"chunkCount":10,"responseTime":95}}}
 
-data: {"event":"token","data":"批"}
+data: {"event":"answer","data":{"finalAnswer":"审批流程分为发起、部门审核、法务复核、归档。","citations":[]}}
 
-data: {"event":"done","data":{"sessionId":"s-001","requestId":"req-001","finalAnswer":"...","citations":[],"toolCalls":[],"latencyMs":1040}}
+data: {"event":"done","data":{"sessionId":"s-001","requestId":"req-001","traceId":"trace-001","finalAnswer":"...","citations":[],"toolCalls":[],"traceEvents":[],"latencyMs":1040}}
 ```
+
+流式事件类型说明：
+
+- `step`：步骤状态变化，`status` 取值为 `started | success | failed`
+- `answer`：答案与证据已准备完成
+- `done`：返回完整 `OrchestratorChatResponseModel`
+- `error`：流式执行异常，格式为 `{"requestId":"...","traceId":"...","message":"..."}`
 
 ### 7.2 POST `/orchestrator/tasks`
 
@@ -226,6 +273,11 @@ data: {"event":"done","data":{"sessionId":"s-001","requestId":"req-001","finalAn
   "status": "pending",
   "taskType": "report_generation",
   "sessionId": "s-task-001",
+  "requestId": "req-task-001",
+  "traceId": "trace-task-001",
+  "currentStep": "等待执行",
+  "progressPercent": 0,
+  "traceEvents": [],
   "result": null,
   "error": null,
   "createTime": "2026-03-10T10:00:00",
@@ -244,6 +296,12 @@ data: {"event":"done","data":{"sessionId":"s-001","requestId":"req-001","finalAn
 状态值：
 
 - `pending | running | success | failed`
+
+补充字段：
+
+- `currentStep`：当前执行步骤
+- `progressPercent`：执行进度，范围 `0~100`
+- `traceEvents`：结构化步骤轨迹
 
 ### 7.4 GET `/orchestrator/sessions/{sessionId}`
 

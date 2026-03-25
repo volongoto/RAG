@@ -4,7 +4,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-from module_rag.entity.vo.rag_vo import SourceChunkModel
+from module_rag.entity.vo.rag_vo import KnowledgeBaseModel, QueryRequestModel, SourceChunkModel
 
 
 class RuntimeContextModel(BaseModel):
@@ -69,3 +69,48 @@ class IndexJobModel(BaseModel):
     create_by: Optional[str] = Field(default=None, description='Created by')
     create_time: datetime = Field(description='Created time')
     update_time: datetime = Field(description='Updated time')
+
+
+class ExternalPrincipalModel(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    source_system: str = Field(description='Source system code')
+    external_user_id: Optional[str] = Field(default=None, description='External user ID')
+    external_user_name: Optional[str] = Field(default=None, description='External user name')
+    external_dept_id: Optional[str] = Field(default=None, description='External department ID')
+
+
+class ResolvedPrincipalModel(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    source_system: str = Field(description='Source system code')
+    external_user_id: Optional[str] = Field(default=None, description='External user ID')
+    external_user_name: Optional[str] = Field(default=None, description='External user name')
+    external_dept_id: Optional[str] = Field(default=None, description='External department ID')
+    mapped_user_id: Optional[int] = Field(default=None, description='Mapped local user ID')
+    mapped_user_name: Optional[str] = Field(default=None, description='Mapped local user name')
+    mapped_dept_id: Optional[int] = Field(default=None, description='Mapped local department ID')
+    mapped_dept_name: Optional[str] = Field(default=None, description='Mapped local department name')
+    is_admin: bool = Field(default=False, description='Whether mapped local user is admin')
+    resolution_mode: str = Field(default='unresolved', description='Resolution strategy')
+
+
+class InternalVisibleKnowledgeBasesRequestModel(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    principal: ExternalPrincipalModel = Field(description='External principal payload')
+
+
+class InternalVisibleKnowledgeBasesResponseModel(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    principal: ResolvedPrincipalModel = Field(description='Resolved local principal')
+    kb_ids: list[int] = Field(default_factory=list, description='Visible knowledge base IDs')
+    knowledge_bases: list[KnowledgeBaseModel] = Field(default_factory=list, description='Visible knowledge base list')
+
+
+class InternalQueryRequestModel(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    principal: ExternalPrincipalModel = Field(description='External principal payload')
+    query: QueryRequestModel = Field(description='RAG query payload')

@@ -20,6 +20,7 @@ class QueryService:
         query_db: AsyncSession,
         query_request: QueryRequestModel,
         user_id: int,
+        caller_meta: dict[str, Any] | None = None,
     ) -> QueryResponseModel:
         start_time = datetime.now()
         result = await self.rag_engine.query(
@@ -31,7 +32,7 @@ class QueryService:
             scenario=query_request.scenario,
             answer_mode=query_request.answer_mode,
         )
-        await self._save_query_log(query_db, query_request, result, user_id, start_time)
+        await self._save_query_log(query_db, query_request, result, user_id, start_time, caller_meta=caller_meta)
         return QueryResponseModel(**CamelCaseUtil.transform_result(result))
 
     async def retrieve_services(
@@ -55,15 +56,22 @@ class QueryService:
         result: dict[str, Any],
         user_id: int,
         start_time: datetime,
+        caller_meta: dict[str, Any] | None = None,
     ) -> None:
         from module_rag.entity.do.rag_do import RagQueryLog
 
         try:
+            source_chunks = result.get('source_chunks')
+            if caller_meta:
+                source_chunks = {
+                    'chunks': source_chunks or [],
+                    'bridge_meta': caller_meta,
+                }
             log = RagQueryLog(
                 kb_ids=','.join(map(str, query_request.kb_ids)) if query_request.kb_ids else None,
                 query_text=query_request.query_text,
                 answer_text=result.get('answer_text'),
-                source_chunks=result.get('source_chunks'),
+                source_chunks=source_chunks,
                 query_time=start_time,
                 user_id=user_id,
                 response_time=result.get('response_time'),

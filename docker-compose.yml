@@ -1,67 +1,69 @@
 services:
   # 前端服务
-  ruoyi-frontend:
+  cradle-frontend:
     build:
       context: ./ruoyi-fastapi-frontend
       dockerfile: Dockerfile
     image: cradle-frontend:latest
     container_name: cradle-frontend
     ports:
-      - "12581:80"
+      - "18080:80"
     volumes:
       - ./ruoyi-fastapi-frontend/bin/nginx.docker.conf:/etc/nginx/conf.d/default.conf
     depends_on:
-      - ruoyi-backend
+      - cradle-backend
     networks:
-      - ruoyi-network
+      - cradle-network
 
   # 后端服务
-  ruoyi-backend:
+  cradle-backend:
     build:
       context: ./ruoyi-fastapi-backend
       dockerfile: Dockerfile
     image: cradle-backend:latest
     container_name: cradle-backend
+    env_file:
+      - ./ruoyi-fastapi-backend/.env.docker
     ports:
-      - "29099:9099"
+      - "29099:29099"
     depends_on:
-      ruoyi-db:
+      cradle-db:
         condition: service_healthy
-      ruoyi-redis:
+      cradle-redis:
         condition: service_healthy
     networks:
-      - ruoyi-network
+      - cradle-network
 
   # PostgreSQL服务 (带pgvector扩展)
-  ruoyi-db:
+  cradle-db:
     image: pgvector/pgvector:pg17
     container_name: cradle-db
+    command: ["postgres", "-p", "54322"]
     environment:
       POSTGRES_PASSWORD: root
-      POSTGRES_DB: ruoyi-fastapi
+      POSTGRES_DB: cradle-fastapi
       POSTGRES_INITDB_ARGS: --encoding=UTF8 --lc-collate=C --lc-ctype=C
     ports:
-      - "25432:5432"
+      - "54322:54322"
     volumes:
-      - ./ruoyi-fastapi-backend/sql/ruoyi-fastapi-pg.sql:/docker-entrypoint-initdb.d/1-ruoyi-fastapi-pg.sql
+      - ./ruoyi-fastapi-backend/sql/ruoyi-fastapi-pg.sql:/docker-entrypoint-initdb.d/1-cradle-fastapi-pg.sql
       - ./ruoyi-fastapi-backend/sql/rag_tables.sql:/docker-entrypoint-initdb.d/2-rag_tables.sql
-      - ./ruoyi-fastapi-backend/sql/rag_menu.sql:/docker-entrypoint-initdb.d/3-rag_menu.sql
     networks:
-      - ruoyi-network
+      - cradle-network
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres"]
+      test: ["CMD", "pg_isready", "-U", "postgres", "-p", "54322"]
       interval: 5s
       timeout: 10s
       retries: 30
 
   # Redis服务
-  ruoyi-redis:
+  cradle-redis:
     image: redis:latest
     container_name: cradle-redis
     ports:
       - "26379:6379"
     networks:
-      - ruoyi-network
+      - cradle-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -70,6 +72,6 @@ services:
 
 # 网络配置
 networks:
-  ruoyi-network:
+  cradle-network:
     name: cradle-network
     driver: bridge

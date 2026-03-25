@@ -96,4 +96,3 @@ curl -X POST "http://localhost:29099/rag/retrieve" \
 - 若文档是旧切片策略入库，建议先重建索引或重解析文档，再测试召回效果。
 - `kbIds` 需要替换为你的实际知识库 ID。
 - 请求需要携带有效登录令牌（`Authorization: Bearer <token>`）。
-

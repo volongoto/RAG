@@ -20,9 +20,9 @@ class SwaggerTest(BasePageTest):
         # 获取 iframe 内容框架
         frame = self.page.frame_locator('iframe')
 
-        # 验证 iframe 内部的标题包含 "RuoYi-FastAPI"
+        # 验证 iframe 内部的标题包含 "Cradle-FastAPI"
         h1_locator = frame.locator('h1')
-        await expect(h1_locator).to_contain_text('RuoYi-FastAPI', timeout=15000)
+        await expect(h1_locator).to_contain_text('Cradle-FastAPI', timeout=15000)
 
 
 @pytest.mark.asyncio

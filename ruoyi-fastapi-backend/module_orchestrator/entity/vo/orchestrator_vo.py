@@ -24,6 +24,24 @@ class OrchestratorChatRequestModel(OrchestratorContextModel):
     include_source: bool = Field(default=True, description='Include source chunks')
 
 
+class TraceEventModel(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    event_id: str = Field(description='Event ID')
+    request_id: str = Field(description='Request ID')
+    trace_id: str = Field(description='Trace ID')
+    session_id: str = Field(description='Session ID')
+    task_id: Optional[str] = Field(default=None, description='Task ID')
+    step_key: str = Field(description='Step key')
+    step_label: str = Field(description='Step label')
+    status: Literal['started', 'success', 'failed'] = Field(description='Execution status')
+    start_time: datetime = Field(description='Step start time')
+    end_time: Optional[datetime] = Field(default=None, description='Step end time')
+    latency_ms: Optional[int] = Field(default=None, description='Step latency in milliseconds')
+    summary: Optional[str] = Field(default=None, description='Execution summary')
+    meta: dict[str, Any] = Field(default_factory=dict, description='Step metadata')
+
+
 class ToolCallTraceModel(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
@@ -38,9 +56,11 @@ class OrchestratorChatResponseModel(BaseModel):
 
     session_id: str = Field(description='Session ID')
     request_id: str = Field(description='Request ID')
+    trace_id: str = Field(description='Trace ID')
     final_answer: str = Field(description='Final answer')
     citations: list[SourceChunkModel] = Field(default_factory=list, description='Cited chunks')
     tool_calls: list[ToolCallTraceModel] = Field(default_factory=list, description='Tool traces')
+    trace_events: list[TraceEventModel] = Field(default_factory=list, description='Structured trace events')
     latency_ms: int = Field(description='Total latency in milliseconds')
 
 
@@ -53,9 +73,16 @@ class OrchestratorTaskModel(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     task_id: str = Field(description='Task ID')
+    owner_user_id: Optional[str] = Field(default=None, description='Owner user ID', exclude=True)
+    owner_tenant_id: Optional[str] = Field(default=None, description='Owner tenant ID', exclude=True)
     status: Literal['pending', 'running', 'success', 'failed'] = Field(description='Task status')
     task_type: str = Field(description='Task type')
     session_id: str = Field(description='Session ID')
+    request_id: Optional[str] = Field(default=None, description='Request ID')
+    trace_id: Optional[str] = Field(default=None, description='Trace ID')
+    current_step: Optional[str] = Field(default=None, description='Current step label')
+    progress_percent: int = Field(default=0, ge=0, le=100, description='Task progress percent')
+    trace_events: list[TraceEventModel] = Field(default_factory=list, description='Structured trace events')
     result: Optional[OrchestratorChatResponseModel] = Field(default=None, description='Task result')
     error: Optional[str] = Field(default=None, description='Error message')
     create_time: datetime = Field(description='Created time')
@@ -74,5 +101,7 @@ class OrchestratorSessionViewModel(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     session_id: str = Field(description='Session ID')
+    owner_user_id: Optional[str] = Field(default=None, description='Owner user ID', exclude=True)
+    owner_tenant_id: Optional[str] = Field(default=None, description='Owner tenant ID', exclude=True)
     messages: list[OrchestratorSessionMessageModel] = Field(default_factory=list, description='Session messages')
     update_time: datetime = Field(description='Updated time')

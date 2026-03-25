@@ -115,8 +115,19 @@ job_stores = {
     'sqlalchemy': SQLAlchemyJobStore(url=SQLALCHEMY_DATABASE_URL, engine=engine),
     'redis': RedisJobStore(**redis_config),
 }
-executors = {'default': AsyncIOExecutor(), 'processpool': ProcessPoolExecutor(5)}
-job_defaults = {'coalesce': False, 'max_instance': 1}
+
+
+def build_executors() -> dict[str, Any]:
+    executors_config: dict[str, Any] = {'default': AsyncIOExecutor()}
+    try:
+        executors_config['processpool'] = ProcessPoolExecutor(5)
+    except Exception as exc:
+        logger.warning(f'Process pool executor unavailable, fallback to default executor: {exc}')
+    return executors_config
+
+
+executors = build_executors()
+job_defaults = {'coalesce': False, 'max_instances': 1}
 scheduler = AsyncIOScheduler()
 scheduler.configure(jobstores=job_stores, executors=executors, job_defaults=job_defaults)
 
@@ -189,6 +200,9 @@ class SchedulerUtil:
         job_executor = job_info.job_executor
         if iscoroutinefunction(job_func):
             job_executor = 'default'
+        if job_executor not in executors:
+            logger.warning(f'Executor {job_executor} unavailable, fallback to default executor')
+            job_executor = 'default'
         scheduler.add_job(
             func=job_func,
             trigger=MyCronTrigger.from_crontab(job_info.cron_expression),
@@ -214,6 +228,9 @@ class SchedulerUtil:
         job_func = cls._import_function(job_info.invoke_target)
         job_executor = job_info.job_executor
         if iscoroutinefunction(job_func):
+            job_executor = 'default'
+        if job_executor not in executors:
+            logger.warning(f'Executor {job_executor} unavailable, fallback to default executor')
             job_executor = 'default'
         job_trigger = DateTrigger()
         if job_info.status == '0':
