@@ -964,6 +964,10 @@ class DocumentService:
         return max(1, int(getattr(RAGConfig, 'rag_parse_worker_count', 1)))
 
     @classmethod
+    def _queue_max_size(cls) -> int:
+        return max(0, int(getattr(RAGConfig, 'rag_parse_queue_max_size', 0)))
+
+    @classmethod
     def _default_progress(cls, doc: dict[str, Any]) -> tuple[int, str]:
         status = doc.get('parseStatus') or doc.get('parse_status')
         if status == '2':
@@ -1101,6 +1105,17 @@ class DocumentService:
         token = cls._queue_token(doc_id)
         if await redis.sismember(cls._active_members_key, token):
             return False
+        queue_max_size = cls._queue_max_size()
+        if queue_max_size > 0:
+            queued_count = int(await redis.llen(cls._queue_key) or 0)
+            active_count = int(await redis.scard(cls._active_members_key) or 0)
+            if queued_count + active_count >= queue_max_size:
+                raise ServiceException(
+                    message=(
+                        f'文档解析队列已满（{queue_max_size}）。'
+                        '请稍后重试，或增大 RAG_PARSE_QUEUE_MAX_SIZE。'
+                    )
+                )
         if await redis.sadd(cls._queued_members_key, token) == 0:
             return False
         await redis.rpush(cls._queue_key, token)
@@ -1222,9 +1237,16 @@ class DocumentService:
                     logger.error(f'Document not found: {doc_id}')
                     return
 
-                parser = DocumentParserFactory.get_parser(doc.file_type)
+                # Cache scalar fields before the first commit so parsing does not
+                # depend on ORM attribute refreshes in async background tasks.
+                doc_kb_id = int(doc.kb_id)
+                doc_file_type = doc.file_type
+                doc_file_path = doc.file_path
+                doc_file_name = doc.file_name
+
+                parser = DocumentParserFactory.get_parser(doc_file_type)
                 parse_file_path, should_cleanup_parse_file = await DocumentStorageService.prepare_parse_file(
-                    doc.file_path, doc.file_name
+                    doc_file_path, doc_file_name
                 )
 
                 await cls._set_progress(redis, doc_id, 5, 'Preparing document parsing')
@@ -1239,7 +1261,7 @@ class DocumentService:
 
                 await cls._set_progress(redis, doc_id, 20, f'Extracted {len(paragraphs)} paragraph(s)')
                 splitter = ChunkSplitter()
-                chunks = splitter.split_paragraphs(paragraphs, doc_id, doc.kb_id)
+                chunks = splitter.split_paragraphs(paragraphs, doc_id, doc_kb_id)
                 if not chunks:
                     raise ServiceException(message='Document produced no chunks after splitting')
 

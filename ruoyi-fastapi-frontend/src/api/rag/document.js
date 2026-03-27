@@ -15,18 +15,29 @@ export function getDocument(docId) {
   })
 }
 
-export function uploadDocument(kbId, file) {
+export function getDocumentUploadPolicy() {
+  return request({
+    url: '/rag/doc/upload-policy',
+    method: 'get'
+  })
+}
+
+export function uploadDocument(kbId, file, config = {}) {
   const formData = new FormData()
   formData.append('file', file)
+  const { headers = {}, ...restConfig } = config
   return request({
     url: '/rag/doc/upload',
     method: 'post',
     params: { kbId: kbId },
     data: formData,
+    timeout: restConfig.timeout ?? 0,
+    ...restConfig,
     headers: {
       'Content-Type': 'multipart/form-data',
       repeatSubmit: false,
-      showLoading: false
+      showLoading: false,
+      ...headers
     }
   })
 }

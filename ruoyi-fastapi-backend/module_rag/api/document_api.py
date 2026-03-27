@@ -13,14 +13,23 @@ from common.aspect.pre_auth import CurrentUserDependency, PreAuthDependency
 from common.enums import BusinessType
 from common.router import APIRouterPro
 from common.vo import DataResponseModel, ResponseBaseModel
+from config.env import RAGConfig
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_rag.entity.do.rag_do import RagKnowledgeBase
-from module_rag.entity.vo.rag_vo import DeleteDocumentModel, DocumentModel, DocumentQueryModel
+from module_rag.entity.vo.rag_vo import (
+    DeleteDocumentModel,
+    DocumentModel,
+    DocumentQueryModel,
+    DocumentUploadPolicyModel,
+)
 from module_rag.service.document_storage_service import DocumentStorageService
 from module_rag.service.knowledge_base_service import KnowledgeBaseDataScope, KnowledgeBaseService
 from module_rag.service.rag_service import DocumentService
 from utils.log_util import logger
 from utils.response_util import ResponseUtil
+
+ALLOWED_DOCUMENT_EXTENSIONS = ['pdf', 'docx']
+BYTES_PER_MB = 1024 * 1024
 
 document_controller = APIRouterPro(
     prefix='/rag/doc', order_num=21, tags=['RAG-文档管理'], dependencies=[PreAuthDependency()]
@@ -45,6 +54,37 @@ async def get_document_list(
     logger.info('获取成功')
 
     return ResponseUtil.success(data=doc_query_result)
+
+
+def _normalize_non_negative_int(value: int | None, default: int = 0) -> int:
+    if value is None:
+        return default
+    return max(default, int(value))
+
+
+def _build_upload_policy() -> DocumentUploadPolicyModel:
+    return DocumentUploadPolicyModel(
+        allowed_extensions=ALLOWED_DOCUMENT_EXTENSIONS,
+        submit_concurrency=max(1, int(getattr(RAGConfig, 'rag_upload_submit_concurrency', 2))),
+        queue_size=_normalize_non_negative_int(getattr(RAGConfig, 'rag_upload_queue_size', 0)),
+        max_total_size_bytes=_normalize_non_negative_int(getattr(RAGConfig, 'rag_upload_max_total_size_mb', 0))
+        * BYTES_PER_MB,
+        max_single_file_size_bytes=_normalize_non_negative_int(
+            getattr(RAGConfig, 'rag_upload_max_single_file_size_mb', 200)
+        )
+        * BYTES_PER_MB,
+    )
+
+
+@document_controller.get(
+    '/upload-policy',
+    summary='获取文档上传策略接口',
+    description='用于获取上传并发、批量文件数和大小限制',
+    response_model=DataResponseModel[DocumentUploadPolicyModel],
+    dependencies=[UserInterfaceAuthDependency('rag:doc:add')],
+)
+async def get_document_upload_policy() -> Response:
+    return ResponseUtil.success(data=_build_upload_policy())
 
 
 @document_controller.get(
@@ -103,11 +143,16 @@ async def upload_document(
         return ResponseUtil.failure(msg='文件名不能为空')
     
     file_ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
-    if file_ext not in ['pdf', 'docx']:
+    if file_ext not in ALLOWED_DOCUMENT_EXTENSIONS:
         return ResponseUtil.failure(msg='仅支持PDF和Word文档')
     
+    upload_policy = _build_upload_policy()
     file_content = await file.read()
     file_size = len(file_content)
+    if upload_policy.max_single_file_size_bytes > 0 and file_size > upload_policy.max_single_file_size_bytes:
+        max_size_mb = upload_policy.max_single_file_size_bytes // BYTES_PER_MB
+        return ResponseUtil.failure(msg=f'单个文档大小不能超过 {max_size_mb} MB')
+
     file_path = await DocumentStorageService.store_uploaded_file(kb_id, file.filename, file_content)
     
     upload_result = await DocumentService.upload_document_services(

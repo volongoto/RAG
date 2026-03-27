@@ -5,6 +5,7 @@ import os
 import uuid
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from minio import Minio
 from minio.error import S3Error
@@ -40,6 +41,29 @@ class DocumentStorageService:
         return f"rag/{kb_id}/{datetime.now():%Y%m%d%H%M%S}_{uuid.uuid4().hex}_{safe_name}"
 
     @classmethod
+    def _normalize_minio_endpoint(cls, endpoint: str) -> tuple[str, bool]:
+        normalized_endpoint = (endpoint or '').strip()
+        secure = bool(getattr(RAGConfig, 'rag_minio_secure', False))
+        if not normalized_endpoint:
+            return normalized_endpoint, secure
+
+        if '://' not in normalized_endpoint:
+            return normalized_endpoint, secure
+
+        parsed = urlparse(normalized_endpoint)
+        if not parsed.netloc:
+            raise ServiceException(message='MinIO endpoint format is invalid')
+        if parsed.path not in ('', '/'):
+            raise ServiceException(message='MinIO endpoint must not contain a path')
+        if parsed.scheme == 'https':
+            secure = True
+        elif parsed.scheme == 'http':
+            secure = False
+        else:
+            raise ServiceException(message='MinIO endpoint scheme must be http or https')
+        return parsed.netloc, secure
+
+    @classmethod
     def _get_minio_client(cls) -> Minio:
         if cls._client is not None:
             return cls._client
@@ -50,11 +74,13 @@ class DocumentStorageService:
         if not endpoint or not access_key or not secret_key:
             raise ServiceException(message='MinIO storage is enabled but configuration is incomplete')
 
+        endpoint, secure = cls._normalize_minio_endpoint(endpoint)
+
         cls._client = Minio(
             endpoint,
             access_key=access_key,
             secret_key=secret_key,
-            secure=bool(getattr(RAGConfig, 'rag_minio_secure', False)),
+            secure=secure,
             region=(getattr(RAGConfig, 'rag_minio_region', '') or None),
         )
         return cls._client
@@ -68,11 +94,15 @@ class DocumentStorageService:
         if cls._bucket_ready:
             return
 
-        client = cls._get_minio_client()
-        bucket_name = getattr(RAGConfig, 'rag_minio_bucket', 'cradle-rag')
-        if not client.bucket_exists(bucket_name):
-            client.make_bucket(bucket_name)
-        cls._bucket_ready = True
+        try:
+            client = cls._get_minio_client()
+            bucket_name = getattr(RAGConfig, 'rag_minio_bucket', 'cradle-rag')
+            if not client.bucket_exists(bucket_name):
+                client.make_bucket(bucket_name)
+            cls._bucket_ready = True
+        except Exception as exc:
+            logger.exception(f'Failed to initialize MinIO bucket: {exc}')
+            raise ServiceException(message='MinIO is unavailable or misconfigured') from exc
 
     @classmethod
     async def store_uploaded_file(cls, kb_id: int, file_name: str, file_content: bytes) -> str:
@@ -111,7 +141,11 @@ class DocumentStorageService:
             )
             return object_key
 
-        return await asyncio.to_thread(_upload_to_minio)
+        try:
+            return await asyncio.to_thread(_upload_to_minio)
+        except Exception as exc:
+            logger.exception(f'Failed to upload document to MinIO: {object_key}, error={exc}')
+            raise ServiceException(message='文档上传到对象存储失败，请检查 MinIO 配置和容器状态') from exc
 
     @classmethod
     async def prepare_parse_file(cls, stored_path: str, file_name: str) -> tuple[str, bool]:

@@ -134,7 +134,12 @@ class RAGSettings(BaseSettings):
     rag_embedding_model: str = 'BAAI/bge-m3'
     rag_embedding_batch_size: int = 50
     rag_embedding_dimension: int = 1024
+    rag_upload_submit_concurrency: int = 2
+    rag_upload_queue_size: int = 0
+    rag_upload_max_total_size_mb: int = 0
+    rag_upload_max_single_file_size_mb: int = 200
     rag_parse_worker_count: int = 2
+    rag_parse_queue_max_size: int = 0
     rag_document_storage: Literal['local', 'minio'] = 'local'
     rag_minio_endpoint: str = ''
     rag_minio_access_key: str = ''

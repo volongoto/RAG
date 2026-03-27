@@ -124,6 +124,22 @@ class DeleteDocumentModel(BaseModel):
     update_time: Optional[datetime] = Field(default=None, description='Updated time')
 
 
+class DocumentUploadPolicyModel(BaseModel):
+    """
+    Document upload policy model.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    allowed_extensions: list[str] = Field(default_factory=list, description='Allowed file extensions')
+    submit_concurrency: int = Field(default=1, description='Upload submit concurrency')
+    queue_size: int = Field(default=0, description='Max file count per batch, 0 means unlimited')
+    max_total_size_bytes: int = Field(default=0, description='Max total size per batch in bytes, 0 means unlimited')
+    max_single_file_size_bytes: int = Field(
+        default=0, description='Max single file size in bytes, 0 means unlimited'
+    )
+
+
 class ChunkModel(BaseModel):
     """
     Chunk model.
