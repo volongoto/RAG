@@ -53,6 +53,18 @@ class DocumentDao:
         return doc_list
 
     @classmethod
+    async def get_docs_by_parse_statuses(cls, db: AsyncSession, statuses: list[str]) -> Sequence[RagDocument]:
+        """
+        Get documents by parse status for task recovery.
+        """
+        query = (
+            select(RagDocument)
+            .where(RagDocument.del_flag == '0', RagDocument.parse_status.in_(statuses))
+            .order_by(RagDocument.create_time.asc())
+        )
+        return (await db.execute(query)).scalars().all()
+
+    @classmethod
     async def add_doc_dao(cls, db: AsyncSession, doc: DocumentModel) -> RagDocument:
         """
         新增文档
@@ -70,13 +82,23 @@ class DocumentDao:
         await db.execute(update(RagDocument).where(RagDocument.doc_id == doc['doc_id']), [doc])
 
     @classmethod
-    async def update_parse_status_dao(cls, db: AsyncSession, doc_id: int, status: str, error_msg: str = None, chunk_count: int = None) -> None:
+    async def update_parse_status_dao(
+        cls,
+        db: AsyncSession,
+        doc_id: int,
+        status: str,
+        error_msg: str = None,
+        chunk_count: int = None,
+        clear_error: bool = False,
+    ) -> None:
         """
         更新文档解析状态
         """
-        values = {'parse_status': status}
+        values = {'parse_status': status, 'update_time': func.now()}
         if error_msg is not None:
             values['parse_error'] = error_msg
+        elif clear_error:
+            values['parse_error'] = None
         if chunk_count is not None:
             values['chunk_count'] = chunk_count
         await db.execute(

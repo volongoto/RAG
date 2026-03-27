@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from typing import Union
 
-from sqlalchemy import and_, delete, func, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_admin.entity.do.menu_do import SysMenu
@@ -14,6 +14,20 @@ class MenuDao:
     """
     菜单管理模块数据库操作层
     """
+
+    EXCLUDED_MENU_NAME = '若依官网'
+    EXCLUDED_MENU_PATHS = ('http://ruoyi.vip', 'https://ruoyi.vip')
+    EXCLUDED_MENU_COMPONENTS = ('tool/build/index',)
+    EXCLUDED_MENU_PERMS = ('tool:build:list',)
+
+    @classmethod
+    def _menu_visibility_clause(cls):
+        return and_(
+            SysMenu.menu_name != cls.EXCLUDED_MENU_NAME,
+            or_(SysMenu.path.is_(None), ~SysMenu.path.in_(cls.EXCLUDED_MENU_PATHS)),
+            or_(SysMenu.component.is_(None), ~SysMenu.component.in_(cls.EXCLUDED_MENU_COMPONENTS)),
+            or_(SysMenu.perms.is_(None), ~SysMenu.perms.in_(cls.EXCLUDED_MENU_PERMS)),
+        )
 
     @classmethod
     async def get_menu_detail_by_id(cls, db: AsyncSession, menu_id: int) -> Union[SysMenu, None]:
@@ -66,7 +80,14 @@ class MenuDao:
         role_id_list = [item.role_id for item in role]
         if 1 in role_id_list:
             menu_query_all = (
-                (await db.execute(select(SysMenu).where(SysMenu.status == '0').order_by(SysMenu.order_num).distinct()))
+                (
+                    await db.execute(
+                        select(SysMenu)
+                        .where(SysMenu.status == '0', cls._menu_visibility_clause())
+                        .order_by(SysMenu.order_num)
+                        .distinct()
+                    )
+                )
                 .scalars()
                 .all()
             )
@@ -86,7 +107,14 @@ class MenuDao:
                             isouter=True,
                         )
                         .join(SysRoleMenu, SysRole.role_id == SysRoleMenu.role_id, isouter=True)
-                        .join(SysMenu, and_(SysRoleMenu.menu_id == SysMenu.menu_id, SysMenu.status == '0'))
+                        .join(
+                            SysMenu,
+                            and_(
+                                SysRoleMenu.menu_id == SysMenu.menu_id,
+                                SysMenu.status == '0',
+                                cls._menu_visibility_clause(),
+                            ),
+                        )
                         .order_by(SysMenu.order_num)
                         .distinct()
                     )
@@ -119,6 +147,7 @@ class MenuDao:
                         .where(
                             SysMenu.status == page_object.status if page_object.status else True,
                             SysMenu.menu_name.like(f'%{page_object.menu_name}%') if page_object.menu_name else True,
+                            cls._menu_visibility_clause(),
                         )
                         .order_by(SysMenu.order_num)
                         .distinct()
@@ -149,6 +178,7 @@ class MenuDao:
                                 SysRoleMenu.menu_id == SysMenu.menu_id,
                                 SysMenu.status == page_object.status if page_object.status else True,
                                 SysMenu.menu_name.like(f'%{page_object.menu_name}%') if page_object.menu_name else True,
+                                cls._menu_visibility_clause(),
                             ),
                         )
                         .order_by(SysMenu.order_num)

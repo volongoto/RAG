@@ -1,12 +1,18 @@
 import asyncio
 import difflib
+import json
+import math
+import os
 import re
 from datetime import datetime
 from typing import Any
 
 from config.env import RAGConfig
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableLambda
 from llama_index.llms.openai_like import OpenAILike
 from loguru import logger
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.vo import CrudResponseModel
@@ -15,6 +21,7 @@ from module_rag.dao.chunk_dao import ChunkDao
 from module_rag.dao.document_dao import DocumentDao
 from module_rag.entity.vo.rag_vo import DocumentModel
 from module_rag.service.chunk_splitter import ChunkSplitter
+from module_rag.service.document_storage_service import DocumentStorageService
 from module_rag.service.embedding_service import EmbeddingService
 from module_rag.service.parser.document_parser import DocumentParserFactory
 
@@ -24,6 +31,7 @@ class RAGEngine:
 
     def __init__(self):
         self.llm = self._init_llm()
+        self.output_cleaner = self._init_output_cleaner()
         self.embedding_service = EmbeddingService.get_instance()
 
     def _init_llm(self):
@@ -34,6 +42,9 @@ class RAGEngine:
             temperature=RAGConfig.rag_llm_temperature,
             max_tokens=RAGConfig.rag_llm_max_tokens,
         )
+
+    def _init_output_cleaner(self):
+        return RunnableLambda(self._remove_output_artifacts, name='sanitize_rag_answer') | StrOutputParser()
 
     async def retrieve(
         self,
@@ -119,8 +130,9 @@ class RAGEngine:
 
             context = self._build_context(source_chunks)
             prompt = self._build_prompt(query_text, context, scenario, normalized_answer_mode)
+            raw_answer = await self._generate_answer(prompt)
             answer = self._post_process_answer(
-                await self._generate_answer(prompt),
+                await self._sanitize_model_output(raw_answer),
                 query_text=query_text,
                 scenario=scenario,
                 answer_mode=normalized_answer_mode,
@@ -342,6 +354,41 @@ class RAGEngine:
                 response = await self.llm.acomplete(prompt)
         return str(response).strip()
 
+    async def _sanitize_model_output(self, answer: str) -> str:
+        text = (answer or '').strip()
+        if not text:
+            return ''
+
+        try:
+            return str(await self.output_cleaner.ainvoke(text)).strip()
+        except Exception as exc:
+            logger.warning(f'LangChain output cleaner failed, fallback to local sanitizer: {exc}')
+            return self._remove_output_artifacts(text)
+
+    def _remove_output_artifacts(self, text: str) -> str:
+        cleaned = (text or '').replace('\r\n', '\n').replace('\r', '\n').strip()
+        if not cleaned:
+            return ''
+
+        think_close_matches = list(re.finditer(r'</think\s*>', cleaned, flags=re.IGNORECASE))
+        if think_close_matches:
+            cleaned = cleaned[think_close_matches[-1].end() :].strip()
+
+        cleaned = re.sub(r'<think\b[^>]*>.*?</think\s*>', ' ', cleaned, flags=re.IGNORECASE | re.DOTALL)
+        cleaned = re.sub(r'</?think\b[^>]*>', ' ', cleaned, flags=re.IGNORECASE)
+
+        leading_instruction_patterns = [
+            r'^\s*(?:请|请你)?(?:严格)?(?:基于|根据)参考资料[^。\n]{0,80}?(?:给出|输出|整理|总结|提供)[^。\n]{0,80}?(?:结构化)?(?:回答|答复|结论)[：:。]?\s*',
+            r'^\s*(?:请|请你)?(?:基于|根据)已检索到的内容[^。\n]{0,80}?(?:回答|答复|结论)[：:。]?\s*',
+            r'^\s*(?:下面|以下)是(?:根据|基于)参考资料整理的(?:结构化)?(?:回答|答复)[：:。]?\s*',
+        ]
+        for pattern in leading_instruction_patterns:
+            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+
+        cleaned = re.sub(r'[ \t]+', ' ', cleaned)
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        return cleaned.strip()
+
     def _post_process_answer(
         self, answer: str, query_text: str = '', scenario: str | None = None, answer_mode: str = 'detailed'
     ) -> str:
@@ -408,6 +455,7 @@ class RAGEngine:
             return text
 
         leakage_patterns = [
+            r'^</?think\b',
             r'^好的[,，]我现在',
             r'^我现在需要',
             r'^用户的问题是',
@@ -624,29 +672,102 @@ class RAGEngine:
         return formatted
 
 
-class DocumentService:
-    """Document management service."""
+class LegacyDocumentService:
+    """Legacy document management service."""
+
+    _parse_tasks: dict[int, asyncio.Task] = {}
+    _progress_key_prefix = 'rag:doc:parse_progress'
+    _progress_ttl_seconds = 24 * 60 * 60
+
+    @classmethod
+    def _progress_key(cls, doc_id: int) -> str:
+        return f'{cls._progress_key_prefix}:{doc_id}'
+
+    @classmethod
+    def _default_progress(cls, doc: dict[str, Any]) -> tuple[int, str]:
+        status = doc.get('parseStatus') or doc.get('parse_status')
+        if status == '2':
+            return 100, '解析完成'
+        if status == '3':
+            return 0, doc.get('parseError') or doc.get('parse_error') or '解析失败'
+        if status == '1':
+            return 1, '解析中'
+        return 0, '等待解析'
+
+    @classmethod
+    async def _set_progress(cls, redis: Redis | None, doc_id: int, progress: int, message: str) -> None:
+        if redis is None:
+            return
+        payload = json.dumps(
+            {
+                'parseProgress': max(0, min(100, int(progress))),
+                'parseMessage': message,
+            },
+            ensure_ascii=False,
+        )
+        await redis.set(cls._progress_key(doc_id), payload, ex=cls._progress_ttl_seconds)
+
+    @classmethod
+    async def _get_progress(cls, redis: Redis | None, doc_id: int) -> dict[str, Any]:
+        if redis is None:
+            return {}
+        raw_value = await redis.get(cls._progress_key(doc_id))
+        if not raw_value:
+            return {}
+        try:
+            progress_data = json.loads(raw_value)
+        except json.JSONDecodeError:
+            return {}
+        return progress_data if isinstance(progress_data, dict) else {}
+
+    @classmethod
+    async def _decorate_docs_with_progress(cls, redis: Redis | None, docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        for doc in docs:
+            doc_id = doc.get('docId') or doc.get('doc_id')
+            default_progress, default_message = cls._default_progress(doc)
+            progress_data = await cls._get_progress(redis, int(doc_id)) if doc_id else {}
+            doc['parseProgress'] = int(progress_data.get('parseProgress', default_progress))
+            doc['parseMessage'] = progress_data.get('parseMessage') or default_message
+        return docs
+
+    @classmethod
+    def _start_parse_task(cls, doc_id: int, redis: Redis | None) -> None:
+        existing_task = cls._parse_tasks.get(doc_id)
+        if existing_task and not existing_task.done():
+            return
+        cls._parse_tasks[doc_id] = asyncio.create_task(cls._parse_document_async(doc_id, redis))
 
     @classmethod
     async def get_doc_list_services(
-        cls, query_db: AsyncSession, page_object: DocumentModel, data_scope_sql=None
+        cls,
+        query_db: AsyncSession,
+        page_object: DocumentModel,
+        data_scope_sql=None,
+        redis: Redis | None = None,
     ) -> list[dict[str, Any]]:
         doc_list_result = await DocumentDao.get_doc_list(query_db, page_object, data_scope_sql)
         from utils.common_util import CamelCaseUtil
 
-        return CamelCaseUtil.transform_result(doc_list_result)
+        doc_list = CamelCaseUtil.transform_result(doc_list_result)
+        return await cls._decorate_docs_with_progress(redis, doc_list)
 
     @classmethod
-    async def get_doc_detail_services(cls, query_db: AsyncSession, doc_id: int) -> DocumentModel:
+    async def get_doc_detail_services(
+        cls, query_db: AsyncSession, doc_id: int, redis: Redis | None = None
+    ) -> DocumentModel:
         doc = await DocumentDao.get_doc_by_id(query_db, doc_id)
         from utils.common_util import CamelCaseUtil
 
-        return DocumentModel(**CamelCaseUtil.transform_result(doc)) if doc else DocumentModel()
+        if not doc:
+            return DocumentModel()
+        doc_list = await cls._decorate_docs_with_progress(redis, [CamelCaseUtil.transform_result(doc)])
+        return DocumentModel(**doc_list[0])
 
     @classmethod
     async def upload_document_services(
         cls,
         query_db: AsyncSession,
+        redis: Redis | None,
         kb_id: int,
         file_name: str,
         file_path: str,
@@ -654,6 +775,9 @@ class DocumentService:
         file_type: str,
         create_by: str,
     ) -> CrudResponseModel:
+        doc_id: int | None = None
+        doc_committed = False
+        queue_submitted = False
         try:
             doc = DocumentModel(
                 kb_id=kb_id,
@@ -668,14 +792,15 @@ class DocumentService:
             db_doc = await DocumentDao.add_doc_dao(query_db, doc)
             doc_id = db_doc.doc_id
             await query_db.commit()
-            asyncio.create_task(cls._parse_document_async(doc_id))
+            await cls._set_progress(redis, doc_id, 0, '等待解析任务启动')
+            cls._start_parse_task(doc_id, redis)
             return CrudResponseModel(is_success=True, message='Upload succeeded, parsing started.')
         except Exception:
             await query_db.rollback()
             raise
 
     @classmethod
-    async def _parse_document_async(cls, doc_id: int) -> None:
+    async def _parse_document_async(cls, doc_id: int, redis: Redis | None) -> None:
         from config.database import AsyncSessionLocal
 
         try:
@@ -688,49 +813,108 @@ class DocumentService:
                 file_type = doc.file_type
                 file_path = doc.file_path
                 kb_id = doc.kb_id
-                await DocumentDao.update_parse_status_dao(db, doc_id, '1')
+
+                await cls._set_progress(redis, doc_id, 5, '准备解析文档')
+                await ChunkDao.delete_chunks_by_doc_id_dao(db, doc_id)
+                await DocumentDao.update_parse_status_dao(db, doc_id, '1', chunk_count=0, clear_error=True)
                 await db.commit()
 
                 parser = DocumentParserFactory.get_parser(file_type)
+                if not os.path.exists(file_path):
+                    raise ServiceException(message='Document file is missing in storage, please re-upload')
+                await cls._set_progress(redis, doc_id, 10, '正在解析文档内容')
                 paragraphs = await parser.parse(file_path)
+                if not paragraphs:
+                    raise ServiceException(message='Document contains no extractable text')
+
+                await cls._set_progress(redis, doc_id, 20, f'已提取 {len(paragraphs)} 个段落')
                 splitter = ChunkSplitter()
                 chunks = splitter.split_paragraphs(paragraphs, doc_id, kb_id)
+                if not chunks:
+                    raise ServiceException(message='Document produced no chunks after splitting')
+
+                chunk_count = len(chunks)
+                await DocumentDao.update_parse_status_dao(db, doc_id, '1', chunk_count=chunk_count, clear_error=True)
+                await db.commit()
+                await cls._set_progress(redis, doc_id, 30, f'已切分 {chunk_count} 个片段，开始生成向量')
 
                 embedding_service = EmbeddingService.get_instance()
-                texts = [chunk['content'] for chunk in chunks]
-                embeddings = await embedding_service.get_text_embeddings(texts)
+                batch_size = max(1, int(RAGConfig.rag_embedding_batch_size))
+                total_batches = max(1, math.ceil(chunk_count / batch_size))
+                embedded_count = 0
 
-                for chunk, embedding in zip(chunks, embeddings):
-                    chunk['embedding'] = embedding
-                    if 'metadata' in chunk and 'chunk_metadata' not in chunk:
-                        chunk['chunk_metadata'] = chunk.pop('metadata')
+                for batch_index, start in enumerate(range(0, chunk_count, batch_size), start=1):
+                    batch_chunks = chunks[start : start + batch_size]
+                    texts = [chunk['content'] for chunk in batch_chunks]
+                    embeddings = await embedding_service.get_text_embeddings(texts)
+                    if len(embeddings) != len(batch_chunks):
+                        raise ServiceException(message='Embedding count does not match chunk count')
 
+                    for chunk, embedding in zip(batch_chunks, embeddings):
+                        chunk['embedding'] = embedding
+                        if 'metadata' in chunk and 'chunk_metadata' not in chunk:
+                            chunk['chunk_metadata'] = chunk.pop('metadata')
+
+                    embedded_count += len(batch_chunks)
+                    progress = 30 + int((batch_index / total_batches) * 60)
+                    await cls._set_progress(
+                        redis,
+                        doc_id,
+                        progress,
+                        f'正在生成向量 {embedded_count}/{chunk_count}',
+                    )
+
+                await cls._set_progress(redis, doc_id, 95, '正在保存切片索引')
                 await ChunkDao.batch_add_chunks_dao(db, chunks)
-                chunk_count = len(chunks)
-                await DocumentDao.update_parse_status_dao(db, doc_id, '2', chunk_count=chunk_count)
+                await DocumentDao.update_parse_status_dao(db, doc_id, '2', chunk_count=chunk_count, clear_error=True)
                 await db.commit()
+                await cls._set_progress(redis, doc_id, 100, f'解析完成，共 {chunk_count} 个片段')
                 logger.info(f'Document parsed successfully: doc_id={doc_id}, chunks={chunk_count}')
 
         except Exception as e:
-            logger.error(f'Document parsing failed: doc_id={doc_id}, error={e}')
+            logger.exception(f'Document parsing failed: doc_id={doc_id}, error={e}')
             try:
                 async with AsyncSessionLocal() as db:
+                    await ChunkDao.delete_chunks_by_doc_id_dao(db, doc_id)
                     await DocumentDao.update_parse_status_dao(db, doc_id, '3', error_msg=str(e))
                     await db.commit()
             except Exception:
                 pass
+            await cls._set_progress(redis, doc_id, 0, f'解析失败: {str(e)}')
+        finally:
+            cls._parse_tasks.pop(doc_id, None)
 
     @classmethod
-    async def delete_document_services(cls, query_db: AsyncSession, doc_ids: str, update_by: str) -> CrudResponseModel:
+    async def resume_incomplete_tasks(cls, redis: Redis | None) -> None:
+        from config.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            pending_docs = await DocumentDao.get_docs_by_parse_statuses(db, ['0', '1'])
+        for doc in pending_docs:
+            await cls._set_progress(redis, doc.doc_id, 0, '检测到未完成任务，正在恢复解析')
+            cls._start_parse_task(doc.doc_id, redis)
+        if pending_docs:
+            logger.info(f'Resumed {len(pending_docs)} unfinished document parse tasks')
+
+    @classmethod
+    async def delete_document_services(
+        cls, query_db: AsyncSession, redis: Redis | None, doc_ids: str, update_by: str
+    ) -> CrudResponseModel:
         if not doc_ids:
             raise ServiceException(message='Document IDs are required')
         doc_id_list = doc_ids.split(',')
         try:
             for doc_id in doc_id_list:
-                await ChunkDao.delete_chunks_by_doc_id_dao(query_db, int(doc_id))
+                int_doc_id = int(doc_id)
+                task = cls._parse_tasks.get(int_doc_id)
+                if task and not task.done():
+                    task.cancel()
+                await ChunkDao.delete_chunks_by_doc_id_dao(query_db, int_doc_id)
                 await DocumentDao.delete_doc_dao(
-                    query_db, DocumentModel(docId=int(doc_id), updateBy=update_by, updateTime=datetime.now())
+                    query_db, DocumentModel(docId=int_doc_id, updateBy=update_by, updateTime=datetime.now())
                 )
+                if redis is not None:
+                    await redis.delete(cls._progress_key(int_doc_id))
             await query_db.commit()
             return CrudResponseModel(is_success=True, message='Delete succeeded')
         except Exception:
@@ -738,13 +922,445 @@ class DocumentService:
             raise
 
     @classmethod
-    async def reparse_document_services(cls, query_db: AsyncSession, doc_id: int) -> CrudResponseModel:
+    async def reparse_document_services(
+        cls, query_db: AsyncSession, redis: Redis | None, doc_id: int
+    ) -> CrudResponseModel:
         try:
+            task = cls._parse_tasks.get(doc_id)
+            if task and not task.done():
+                task.cancel()
             await ChunkDao.delete_chunks_by_doc_id_dao(query_db, doc_id)
-            await DocumentDao.update_parse_status_dao(query_db, doc_id, '0')
+            await DocumentDao.update_parse_status_dao(query_db, doc_id, '0', chunk_count=0, clear_error=True)
             await query_db.commit()
-            asyncio.create_task(cls._parse_document_async(doc_id))
+            await cls._set_progress(redis, doc_id, 0, '等待重新解析')
+            cls._start_parse_task(doc_id, redis)
             return CrudResponseModel(is_success=True, message='Reparse task submitted')
+        except Exception:
+            await query_db.rollback()
+            raise
+
+
+class DocumentService:
+    """Queued document parsing service backed by Redis."""
+
+    _parse_tasks: dict[int, asyncio.Task] = {}
+    _worker_tasks: list[asyncio.Task] = []
+    _progress_key_prefix = 'rag:doc:parse_progress'
+    _progress_ttl_seconds = 24 * 60 * 60
+    _queue_key = 'rag:doc:parse_queue'
+    _queued_members_key = 'rag:doc:parse_queue:members'
+    _active_members_key = 'rag:doc:parse_active:members'
+
+    @classmethod
+    def _progress_key(cls, doc_id: int) -> str:
+        return f'{cls._progress_key_prefix}:{doc_id}'
+
+    @classmethod
+    def _queue_token(cls, doc_id: int) -> str:
+        return str(int(doc_id))
+
+    @classmethod
+    def _worker_count(cls) -> int:
+        return max(1, int(getattr(RAGConfig, 'rag_parse_worker_count', 1)))
+
+    @classmethod
+    def _default_progress(cls, doc: dict[str, Any]) -> tuple[int, str]:
+        status = doc.get('parseStatus') or doc.get('parse_status')
+        if status == '2':
+            return 100, 'Completed'
+        if status == '3':
+            return 0, doc.get('parseError') or doc.get('parse_error') or 'Failed'
+        if status == '1':
+            return 1, 'Processing'
+        return 0, 'Queued'
+
+    @classmethod
+    async def _set_progress(cls, redis: Redis | None, doc_id: int, progress: int, message: str) -> None:
+        if redis is None:
+            return
+        payload = json.dumps(
+            {
+                'parseProgress': max(0, min(100, int(progress))),
+                'parseMessage': message,
+            },
+            ensure_ascii=False,
+        )
+        await redis.set(cls._progress_key(doc_id), payload, ex=cls._progress_ttl_seconds)
+
+    @classmethod
+    async def _get_progress(cls, redis: Redis | None, doc_id: int) -> dict[str, Any]:
+        if redis is None:
+            return {}
+        raw_value = await redis.get(cls._progress_key(doc_id))
+        if not raw_value:
+            return {}
+        try:
+            progress_data = json.loads(raw_value)
+        except json.JSONDecodeError:
+            return {}
+        return progress_data if isinstance(progress_data, dict) else {}
+
+    @classmethod
+    async def _decorate_docs_with_progress(cls, redis: Redis | None, docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        for doc in docs:
+            doc_id = doc.get('docId') or doc.get('doc_id')
+            default_progress, default_message = cls._default_progress(doc)
+            progress_data = await cls._get_progress(redis, int(doc_id)) if doc_id else {}
+            doc['parseProgress'] = int(progress_data.get('parseProgress', default_progress))
+            doc['parseMessage'] = progress_data.get('parseMessage') or default_message
+        return docs
+
+    @classmethod
+    async def start_queue_workers(cls, redis: Redis | None) -> None:
+        if redis is None:
+            return
+        cls._worker_tasks = [task for task in cls._worker_tasks if not task.done()]
+        if cls._worker_tasks:
+            return
+        for worker_index in range(cls._worker_count()):
+            cls._worker_tasks.append(asyncio.create_task(cls._queue_worker(redis, worker_index + 1)))
+        logger.info(f'Started {len(cls._worker_tasks)} document parse queue workers')
+
+    @classmethod
+    async def stop_queue_workers(cls) -> None:
+        parse_tasks = [task for task in cls._parse_tasks.values() if not task.done()]
+        for task in parse_tasks:
+            task.cancel()
+        if parse_tasks:
+            await asyncio.gather(*parse_tasks, return_exceptions=True)
+
+        worker_tasks = [task for task in cls._worker_tasks if not task.done()]
+        for task in worker_tasks:
+            task.cancel()
+        if worker_tasks:
+            await asyncio.gather(*worker_tasks, return_exceptions=True)
+
+        cls._parse_tasks.clear()
+        cls._worker_tasks = []
+
+    @classmethod
+    async def _queue_worker(cls, redis: Redis, worker_index: int) -> None:
+        while True:
+            current_doc_id: int | None = None
+            current_task: asyncio.Task | None = None
+            try:
+                queue_item = await redis.blpop(cls._queue_key, timeout=5)
+                if not queue_item:
+                    continue
+
+                _, token = queue_item
+                try:
+                    current_doc_id = int(token)
+                except (TypeError, ValueError):
+                    await redis.srem(cls._queued_members_key, token)
+                    continue
+
+                await redis.srem(cls._queued_members_key, token)
+                await redis.sadd(cls._active_members_key, token)
+                await cls._refresh_queue_progress(redis)
+
+                current_task = asyncio.create_task(cls._parse_document_async(current_doc_id, redis))
+                cls._parse_tasks[current_doc_id] = current_task
+                await current_task
+            except asyncio.CancelledError:
+                if current_task and not current_task.done():
+                    current_task.cancel()
+                    await asyncio.gather(current_task, return_exceptions=True)
+                raise
+            except Exception as exc:
+                logger.exception(f'Document parse worker {worker_index} crashed on doc_id={current_doc_id}: {exc}')
+            finally:
+                if current_doc_id is not None:
+                    cls._parse_tasks.pop(current_doc_id, None)
+                    await redis.srem(cls._active_members_key, cls._queue_token(current_doc_id))
+                    await cls._refresh_queue_progress(redis)
+
+    @classmethod
+    async def _refresh_queue_progress(cls, redis: Redis | None) -> None:
+        if redis is None:
+            return
+        queued_tokens = await redis.lrange(cls._queue_key, 0, -1)
+        for index, token in enumerate(queued_tokens):
+            try:
+                doc_id = int(token)
+            except (TypeError, ValueError):
+                await redis.lrem(cls._queue_key, 0, token)
+                await redis.srem(cls._queued_members_key, token)
+                continue
+            message = 'Queued, waiting for an available worker'
+            if index > 0:
+                message = f'Queued, {index} task(s) ahead'
+            await cls._set_progress(redis, doc_id, 0, message)
+
+    @classmethod
+    async def _enqueue_parse_task(cls, redis: Redis | None, doc_id: int) -> bool:
+        if redis is None:
+            cls._start_parse_task(doc_id, None)
+            return True
+
+        token = cls._queue_token(doc_id)
+        if await redis.sismember(cls._active_members_key, token):
+            return False
+        if await redis.sadd(cls._queued_members_key, token) == 0:
+            return False
+        await redis.rpush(cls._queue_key, token)
+        await cls._refresh_queue_progress(redis)
+        return True
+
+    @classmethod
+    async def _remove_from_queue(cls, redis: Redis | None, doc_id: int) -> None:
+        if redis is None:
+            return
+        token = cls._queue_token(doc_id)
+        await redis.lrem(cls._queue_key, 0, token)
+        await redis.srem(cls._queued_members_key, token)
+        await cls._refresh_queue_progress(redis)
+
+    @classmethod
+    async def _cancel_parse_task(cls, doc_id: int) -> None:
+        task = cls._parse_tasks.get(doc_id)
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    @classmethod
+    def _start_parse_task(cls, doc_id: int, redis: Redis | None) -> None:
+        existing_task = cls._parse_tasks.get(doc_id)
+        if existing_task and not existing_task.done():
+            return
+        cls._parse_tasks[doc_id] = asyncio.create_task(cls._parse_document_async(doc_id, redis))
+
+    @classmethod
+    async def get_doc_list_services(
+        cls,
+        query_db: AsyncSession,
+        page_object: DocumentModel,
+        data_scope_sql=None,
+        redis: Redis | None = None,
+    ) -> list[dict[str, Any]]:
+        doc_list_result = await DocumentDao.get_doc_list(query_db, page_object, data_scope_sql)
+        from utils.common_util import CamelCaseUtil
+
+        doc_list = CamelCaseUtil.transform_result(doc_list_result)
+        return await cls._decorate_docs_with_progress(redis, doc_list)
+
+    @classmethod
+    async def get_doc_detail_services(
+        cls, query_db: AsyncSession, doc_id: int, redis: Redis | None = None
+    ) -> DocumentModel:
+        doc = await DocumentDao.get_doc_by_id(query_db, doc_id)
+        from utils.common_util import CamelCaseUtil
+
+        if not doc:
+            return DocumentModel()
+        doc_list = await cls._decorate_docs_with_progress(redis, [CamelCaseUtil.transform_result(doc)])
+        return DocumentModel(**doc_list[0])
+
+    @classmethod
+    async def upload_document_services(
+        cls,
+        query_db: AsyncSession,
+        redis: Redis | None,
+        kb_id: int,
+        file_name: str,
+        file_path: str,
+        file_size: int,
+        file_type: str,
+        create_by: str,
+    ) -> CrudResponseModel:
+        doc_id: int | None = None
+        doc_committed = False
+        queue_submitted = False
+        try:
+            doc = DocumentModel(
+                kb_id=kb_id,
+                file_name=file_name,
+                file_path=file_path,
+                file_size=file_size,
+                file_type=file_type,
+                parse_status='0',
+                create_by=create_by,
+                create_time=datetime.now(),
+            )
+            db_doc = await DocumentDao.add_doc_dao(query_db, doc)
+            doc_id = db_doc.doc_id
+            await query_db.commit()
+            doc_committed = True
+            queue_submitted = await cls._enqueue_parse_task(redis, doc_id)
+            if not queue_submitted:
+                raise ServiceException(message='Document parse task is already queued or running')
+            await cls._set_progress(redis, doc_id, 0, 'Queued, waiting for parsing')
+            return CrudResponseModel(is_success=True, message='Upload succeeded, document queued for parsing.')
+        except Exception as exc:
+            await query_db.rollback()
+            if not doc_committed:
+                await DocumentStorageService.delete_stored_file(file_path)
+            elif doc_id is not None and not queue_submitted:
+                try:
+                    await DocumentDao.update_parse_status_dao(
+                        query_db,
+                        doc_id,
+                        '3',
+                        error_msg=f'Queue submission failed: {exc}',
+                    )
+                    await query_db.commit()
+                except Exception:
+                    await query_db.rollback()
+            raise
+
+    @classmethod
+    async def _parse_document_async(cls, doc_id: int, redis: Redis | None) -> None:
+        from config.database import AsyncSessionLocal
+
+        parse_file_path = ''
+        should_cleanup_parse_file = False
+
+        try:
+            async with AsyncSessionLocal() as db:
+                doc = await DocumentDao.get_doc_by_id(db, doc_id)
+                if not doc:
+                    logger.error(f'Document not found: {doc_id}')
+                    return
+
+                parser = DocumentParserFactory.get_parser(doc.file_type)
+                parse_file_path, should_cleanup_parse_file = await DocumentStorageService.prepare_parse_file(
+                    doc.file_path, doc.file_name
+                )
+
+                await cls._set_progress(redis, doc_id, 5, 'Preparing document parsing')
+                await ChunkDao.delete_chunks_by_doc_id_dao(db, doc_id)
+                await DocumentDao.update_parse_status_dao(db, doc_id, '1', chunk_count=0, clear_error=True)
+                await db.commit()
+
+                await cls._set_progress(redis, doc_id, 10, 'Extracting document text')
+                paragraphs = await parser.parse(parse_file_path)
+                if not paragraphs:
+                    raise ServiceException(message='Document contains no extractable text')
+
+                await cls._set_progress(redis, doc_id, 20, f'Extracted {len(paragraphs)} paragraph(s)')
+                splitter = ChunkSplitter()
+                chunks = splitter.split_paragraphs(paragraphs, doc_id, doc.kb_id)
+                if not chunks:
+                    raise ServiceException(message='Document produced no chunks after splitting')
+
+                chunk_count = len(chunks)
+                await DocumentDao.update_parse_status_dao(db, doc_id, '1', chunk_count=chunk_count, clear_error=True)
+                await db.commit()
+                await cls._set_progress(redis, doc_id, 30, f'Split into {chunk_count} chunk(s), generating embeddings')
+
+                embedding_service = EmbeddingService.get_instance()
+                batch_size = max(1, int(RAGConfig.rag_embedding_batch_size))
+                total_batches = max(1, math.ceil(chunk_count / batch_size))
+                embedded_count = 0
+
+                for batch_index, start in enumerate(range(0, chunk_count, batch_size), start=1):
+                    batch_chunks = chunks[start : start + batch_size]
+                    texts = [chunk['content'] for chunk in batch_chunks]
+                    embeddings = await embedding_service.get_text_embeddings(texts)
+                    if len(embeddings) != len(batch_chunks):
+                        raise ServiceException(message='Embedding count does not match chunk count')
+
+                    for chunk, embedding in zip(batch_chunks, embeddings):
+                        chunk['embedding'] = embedding
+                        if 'metadata' in chunk and 'chunk_metadata' not in chunk:
+                            chunk['chunk_metadata'] = chunk.pop('metadata')
+
+                    embedded_count += len(batch_chunks)
+                    progress = 30 + int((batch_index / total_batches) * 60)
+                    await cls._set_progress(
+                        redis,
+                        doc_id,
+                        progress,
+                        f'Generating embeddings {embedded_count}/{chunk_count}',
+                    )
+
+                await cls._set_progress(redis, doc_id, 95, 'Saving chunk index')
+                await ChunkDao.batch_add_chunks_dao(db, chunks)
+                await DocumentDao.update_parse_status_dao(db, doc_id, '2', chunk_count=chunk_count, clear_error=True)
+                await db.commit()
+                await cls._set_progress(redis, doc_id, 100, f'Completed, {chunk_count} chunk(s) indexed')
+                logger.info(f'Document parsed successfully: doc_id={doc_id}, chunks={chunk_count}')
+        except asyncio.CancelledError:
+            logger.info(f'Document parsing cancelled: doc_id={doc_id}')
+            raise
+        except Exception as exc:
+            logger.exception(f'Document parsing failed: doc_id={doc_id}, error={exc}')
+            try:
+                async with AsyncSessionLocal() as db:
+                    await ChunkDao.delete_chunks_by_doc_id_dao(db, doc_id)
+                    await DocumentDao.update_parse_status_dao(db, doc_id, '3', error_msg=str(exc))
+                    await db.commit()
+            except Exception:
+                pass
+            await cls._set_progress(redis, doc_id, 0, f'Failed: {str(exc)}')
+        finally:
+            await DocumentStorageService.cleanup_parse_file(parse_file_path, should_cleanup_parse_file)
+            cls._parse_tasks.pop(doc_id, None)
+
+    @classmethod
+    async def resume_incomplete_tasks(cls, redis: Redis | None) -> None:
+        from config.database import AsyncSessionLocal
+
+        if redis is not None:
+            await redis.delete(cls._queue_key, cls._queued_members_key, cls._active_members_key)
+
+        async with AsyncSessionLocal() as db:
+            pending_docs = await DocumentDao.get_docs_by_parse_statuses(db, ['0', '1'])
+            for doc in pending_docs:
+                if doc.parse_status != '0':
+                    await DocumentDao.update_parse_status_dao(db, doc.doc_id, '0', clear_error=True)
+            await db.commit()
+
+        for doc in pending_docs:
+            await cls._enqueue_parse_task(redis, doc.doc_id)
+
+        if pending_docs:
+            await cls._refresh_queue_progress(redis)
+            logger.info(f'Resumed {len(pending_docs)} queued document parse task(s)')
+
+    @classmethod
+    async def delete_document_services(
+        cls, query_db: AsyncSession, redis: Redis | None, doc_ids: str, update_by: str
+    ) -> CrudResponseModel:
+        if not doc_ids:
+            raise ServiceException(message='Document IDs are required')
+
+        doc_id_list = doc_ids.split(',')
+        try:
+            for doc_id in doc_id_list:
+                int_doc_id = int(doc_id)
+                await cls._cancel_parse_task(int_doc_id)
+                await cls._remove_from_queue(redis, int_doc_id)
+
+                doc = await DocumentDao.get_doc_by_id(query_db, int_doc_id)
+                await ChunkDao.delete_chunks_by_doc_id_dao(query_db, int_doc_id)
+                await DocumentDao.delete_doc_dao(
+                    query_db, DocumentModel(docId=int_doc_id, updateBy=update_by, updateTime=datetime.now())
+                )
+                if doc:
+                    await DocumentStorageService.delete_stored_file(doc.file_path)
+                if redis is not None:
+                    await redis.delete(cls._progress_key(int_doc_id))
+
+            await query_db.commit()
+            return CrudResponseModel(is_success=True, message='Delete succeeded')
+        except Exception:
+            await query_db.rollback()
+            raise
+
+    @classmethod
+    async def reparse_document_services(
+        cls, query_db: AsyncSession, redis: Redis | None, doc_id: int
+    ) -> CrudResponseModel:
+        try:
+            await cls._cancel_parse_task(doc_id)
+            await cls._remove_from_queue(redis, doc_id)
+            await ChunkDao.delete_chunks_by_doc_id_dao(query_db, doc_id)
+            await DocumentDao.update_parse_status_dao(query_db, doc_id, '0', chunk_count=0, clear_error=True)
+            await query_db.commit()
+            await cls._enqueue_parse_task(redis, doc_id)
+            await cls._set_progress(redis, doc_id, 0, 'Queued for reparse')
+            return CrudResponseModel(is_success=True, message='Reparse task queued')
         except Exception:
             await query_db.rollback()
             raise

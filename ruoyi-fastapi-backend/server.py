@@ -12,6 +12,7 @@ from config.get_redis import RedisUtil
 from config.get_scheduler import SchedulerUtil
 from exceptions.handle import handle_exception
 from middlewares.handle import handle_middleware
+from module_rag.service.rag_service import DocumentService
 from sub_applications.handle import handle_sub_applications
 from utils.common_util import worship
 from utils.log_util import logger
@@ -27,8 +28,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await RedisUtil.init_sys_dict(app.state.redis)
     await RedisUtil.init_sys_config(app.state.redis)
     await SchedulerUtil.init_system_scheduler()
+    await DocumentService.start_queue_workers(app.state.redis)
+    await DocumentService.resume_incomplete_tasks(app.state.redis)
     logger.info(f'🚀 {AppConfig.app_name}启动成功')
     yield
+    await DocumentService.stop_queue_workers()
     await RedisUtil.close_redis_pool(app)
     await SchedulerUtil.close_system_scheduler()
 

@@ -134,6 +134,14 @@ class RAGSettings(BaseSettings):
     rag_embedding_model: str = 'BAAI/bge-m3'
     rag_embedding_batch_size: int = 50
     rag_embedding_dimension: int = 1024
+    rag_parse_worker_count: int = 2
+    rag_document_storage: Literal['local', 'minio'] = 'local'
+    rag_minio_endpoint: str = ''
+    rag_minio_access_key: str = ''
+    rag_minio_secret_key: str = ''
+    rag_minio_bucket: str = 'cradle-rag'
+    rag_minio_secure: bool = False
+    rag_minio_region: str = ''
     rag_chunk_size: int = 512
     rag_chunk_overlap: int = 50
     rag_top_k: int = 5

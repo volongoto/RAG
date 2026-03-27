@@ -24,7 +24,9 @@ export function uploadDocument(kbId, file) {
     params: { kbId: kbId },
     data: formData,
     headers: {
-      'Content-Type': 'multipart/form-data'
+      'Content-Type': 'multipart/form-data',
+      repeatSubmit: false,
+      showLoading: false
     }
   })
 }

@@ -7,6 +7,8 @@ import InnerLink from '@/layout/components/InnerLink'
 
 // 匹配views里面所有的.vue文件
 const modules = import.meta.glob('./../../views/**/*.vue')
+const removedRouteComponents = new Set(['tool/build/index'])
+const removedRoutePermissions = new Set(['tool:build:list'])
 
 const usePermissionStore = defineStore(
   'permission',
@@ -61,6 +63,9 @@ function filterAsyncRouter(asyncRouterMap, lastRouter = false, type = false) {
     if (type && route.children) {
       route.children = filterChildren(route.children)
     }
+    if (isRemovedRoute(route)) {
+      return false
+    }
     if (route.component) {
       // Layout ParentView 组件特殊处理
       if (route.component === 'Layout') {
@@ -75,12 +80,25 @@ function filterAsyncRouter(asyncRouterMap, lastRouter = false, type = false) {
     }
     if (route.children != null && route.children && route.children.length) {
       route.children = filterAsyncRouter(route.children, route, type)
+      if (!route.children.length && !route.component) {
+        delete route['children']
+        delete route['redirect']
+        return false
+      }
     } else {
       delete route['children']
       delete route['redirect']
     }
     return true
   })
+}
+
+function isRemovedRoute(route) {
+  const permissions = Array.isArray(route.permissions) ? route.permissions : []
+  return (
+    removedRouteComponents.has(route.component)
+    || permissions.some(permission => removedRoutePermissions.has(permission))
+  )
 }
 
 function filterChildren(childrenMap, lastRouter = false) {

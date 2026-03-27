@@ -107,6 +107,33 @@
   -webkit-backdrop-filter: var(--panel-glass);
 }
 
+.el-popper .el-popper__arrow::before,
+.el-select__popper .el-popper__arrow::before,
+.el-picker__popper .el-popper__arrow::before {
+  background: var(--panel-bg) !important;
+  border-color: var(--panel-border) !important;
+}
+
+.el-popper[data-popper-placement^='top'] .el-popper__arrow::before {
+  border-left-color: transparent !important;
+  border-top-color: transparent !important;
+}
+
+.el-popper[data-popper-placement^='bottom'] .el-popper__arrow::before {
+  border-bottom-color: transparent !important;
+  border-right-color: transparent !important;
+}
+
+.el-popper[data-popper-placement^='left'] .el-popper__arrow::before {
+  border-bottom-color: transparent !important;
+  border-left-color: transparent !important;
+}
+
+.el-popper[data-popper-placement^='right'] .el-popper__arrow::before {
+  border-right-color: transparent !important;
+  border-top-color: transparent !important;
+}
+
 .el-input__wrapper,
 .el-textarea__inner,
 .el-select__wrapper {

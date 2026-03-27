@@ -26,6 +26,11 @@ services:
       - ./ruoyi-fastapi-backend/.env.docker
     ports:
       - "29099:29099"
+    extra_hosts:
+      - "host.docker.internal:192.168.0.1"
+    volumes:
+      - ./data/cradle-backend/upload_path:/app/vf_admin/upload_path
+      - ./data/cradle-backend/download_path:/app/vf_admin/download_path
     depends_on:
       cradle-db:
         condition: service_healthy

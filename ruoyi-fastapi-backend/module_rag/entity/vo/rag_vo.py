@@ -87,6 +87,8 @@ class DocumentModel(BaseModel):
     chunk_count: Optional[int] = Field(default=0, description='Chunk count')
     parse_status: Optional[Literal['0', '1', '2', '3']] = Field(default='0', description='Parse status')
     parse_error: Optional[str] = Field(default=None, description='Parse error')
+    parse_progress: Optional[int] = Field(default=0, description='Parse progress')
+    parse_message: Optional[str] = Field(default=None, description='Parse progress message')
     del_flag: Optional[Literal['0', '2']] = Field(default=None, description='Delete flag')
     create_by: Optional[str] = Field(default=None, description='Created by')
     create_time: Optional[datetime] = Field(default=None, description='Created time')

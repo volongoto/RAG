@@ -1,4 +1,3 @@
-import os
 from datetime import datetime
 from typing import Annotated
 
@@ -14,10 +13,10 @@ from common.aspect.pre_auth import CurrentUserDependency, PreAuthDependency
 from common.enums import BusinessType
 from common.router import APIRouterPro
 from common.vo import DataResponseModel, ResponseBaseModel
-from config.env import UploadConfig
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_rag.entity.do.rag_do import RagKnowledgeBase
 from module_rag.entity.vo.rag_vo import DeleteDocumentModel, DocumentModel, DocumentQueryModel
+from module_rag.service.document_storage_service import DocumentStorageService
 from module_rag.service.knowledge_base_service import KnowledgeBaseDataScope, KnowledgeBaseService
 from module_rag.service.rag_service import DocumentService
 from utils.log_util import logger
@@ -40,7 +39,9 @@ async def get_document_list(
     doc_query: Annotated[DocumentQueryModel, Query()],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
 ) -> Response:
-    doc_query_result = await DocumentService.get_doc_list_services(query_db, doc_query)
+    doc_query_result = await DocumentService.get_doc_list_services(
+        query_db, doc_query, redis=request.app.state.redis
+    )
     logger.info('获取成功')
 
     return ResponseUtil.success(data=doc_query_result)
@@ -58,7 +59,9 @@ async def query_detail_document(
     doc_id: Annotated[int, Path(description='文档ID')],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
 ) -> Response:
-    detail_doc_result = await DocumentService.get_doc_detail_services(query_db, doc_id)
+    detail_doc_result = await DocumentService.get_doc_detail_services(
+        query_db, doc_id, redis=request.app.state.redis
+    )
     logger.info(f'获取doc_id为{doc_id}的信息成功')
 
     return ResponseUtil.success(data=detail_doc_result)
@@ -105,17 +108,11 @@ async def upload_document(
     
     file_content = await file.read()
     file_size = len(file_content)
-    
-    upload_dir = os.path.join(UploadConfig.UPLOAD_PATH, 'rag', str(kb_id))
-    if not os.path.exists(upload_dir):
-        os.makedirs(upload_dir)
-    
-    file_path = os.path.join(upload_dir, file.filename)
-    with open(file_path, 'wb') as f:
-        f.write(file_content)
+    file_path = await DocumentStorageService.store_uploaded_file(kb_id, file.filename, file_content)
     
     upload_result = await DocumentService.upload_document_services(
         query_db,
+        request.app.state.redis,
         kb_id=kb_id,
         file_name=file.filename,
         file_path=file_path,
@@ -145,7 +142,9 @@ async def delete_document(
     delete_doc = DeleteDocumentModel(
         docIds=doc_ids, updateBy=current_user.user.user_name, updateTime=datetime.now()
     )
-    delete_doc_result = await DocumentService.delete_document_services(query_db, delete_doc.doc_ids, delete_doc.update_by)
+    delete_doc_result = await DocumentService.delete_document_services(
+        query_db, request.app.state.redis, delete_doc.doc_ids, delete_doc.update_by
+    )
     logger.info(delete_doc_result.message)
 
     return ResponseUtil.success(msg=delete_doc_result.message)
@@ -164,7 +163,9 @@ async def reparse_document(
     doc_id: Annotated[int, Path(description='文档ID')],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
 ) -> Response:
-    reparse_result = await DocumentService.reparse_document_services(query_db, doc_id)
+    reparse_result = await DocumentService.reparse_document_services(
+        query_db, request.app.state.redis, doc_id
+    )
     logger.info(reparse_result.message)
 
     return ResponseUtil.success(msg=reparse_result.message)

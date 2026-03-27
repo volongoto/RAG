@@ -246,7 +246,11 @@ class LoginService:
             if 1 in role_id_list:  # noqa: SIM108
                 permissions = ['*:*:*']
             else:
-                permissions = [row.perms for row in query_user.get('user_menu_info')]
+                permissions = [
+                    row.perms
+                    for row in query_user.get('user_menu_info')
+                    if row.perms and not cls.__is_excluded_menu(row)
+                ]
             post_ids = ','.join([str(row.post_id) for row in query_user.get('user_post_info')])
             role_ids = ','.join([str(row.role_id) for row in query_user.get('user_role_info')])
             roles = [row.role_key for row in query_user.get('user_role_info')]
@@ -324,13 +328,26 @@ class LoginService:
             [
                 row
                 for row in query_user.get('user_menu_info')
-                if row.menu_type in [MenuConstant.TYPE_DIR, MenuConstant.TYPE_MENU]
+                if row.menu_type in [MenuConstant.TYPE_DIR, MenuConstant.TYPE_MENU] and not cls.__is_excluded_menu(row)
             ],
             key=lambda x: x.order_num,
         )
         menus = cls.__generate_menus(0, user_router_menu)
         user_router = cls.__generate_user_router_menu(menus)
         return [router.model_dump(exclude_unset=True, by_alias=True) for router in user_router]
+
+    @staticmethod
+    def __is_excluded_menu(menu) -> bool:
+        menu_name = getattr(menu, 'menu_name', '')
+        menu_path = getattr(menu, 'path', '')
+        menu_component = getattr(menu, 'component', '')
+        menu_perms = getattr(menu, 'perms', '')
+        return (
+            menu_name == '若依官网'
+            or menu_path in {'http://ruoyi.vip', 'https://ruoyi.vip'}
+            or menu_component == 'tool/build/index'
+            or menu_perms == 'tool:build:list'
+        )
 
     @classmethod
     def __generate_menus(cls, pid: int, permission_list: list[SysMenu]) -> list[MenuTreeModel]:
