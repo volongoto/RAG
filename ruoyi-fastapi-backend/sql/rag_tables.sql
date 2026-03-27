@@ -113,13 +113,14 @@ COMMENT ON COLUMN rag_chunk.del_flag IS '删除标志（0代表存在 2代表删
 COMMENT ON COLUMN rag_chunk.create_time IS '创建时间';
 COMMENT ON TABLE rag_chunk IS '文档切片表';
 
-CREATE INDEX idx_chunk_doc_id ON rag_chunk(doc_id);
-CREATE INDEX idx_chunk_kb_id ON rag_chunk(kb_id);
+CREATE INDEX idx_chunk_doc_id_del_flag ON rag_chunk(doc_id, del_flag);
+CREATE INDEX idx_chunk_kb_id_del_flag ON rag_chunk(kb_id, del_flag);
 
 -- 创建向量索引（IVFFlat，适用于大规模向量检索）
-CREATE INDEX idx_chunk_embedding ON rag_chunk 
-USING ivfflat (embedding vector_cosine_ops) 
-WITH (lists = 100);
+CREATE INDEX idx_chunk_embedding ON rag_chunk
+USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 1000)
+WHERE del_flag = '0';
 
 -- ----------------------------
 -- 4、查询记录表
