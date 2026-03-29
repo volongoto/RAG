@@ -45,7 +45,10 @@ class EmbeddingService:
                 f'model={RAGConfig.rag_embedding_model}, '
                 f'text_length={len(text or "")}'
             )
-            embedding = await self._embed_model.aget_text_embedding(text)
+            # Use the batch embedding API even for a single query so the
+            # online query path matches the document indexing path exactly.
+            embeddings = await self._embed_model.aget_text_embedding_batch([text])
+            embedding = embeddings[0] if embeddings else []
             logger.info(
                 'Embedding request finished: '
                 f'model={RAGConfig.rag_embedding_model}, '

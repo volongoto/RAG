@@ -141,7 +141,119 @@
 5. Embedding 正常，再看 LLM 日志
 6. 如果是上传/解析问题，再看上传和解析日志
 
-## 9. 建议记录模板
+## 9. 容器内直接验证上游接口
+
+如果怀疑是内网代理、上游 `/v1` 路径或模型服务地址问题，建议直接进入后端容器执行 `curl`。
+
+先进入容器：
+
+```bash
+docker exec -it cradle-backend /bin/bash
+```
+
+### 9.1 验证 Embedding 接口
+
+将下面的变量替换成你线上实际值：
+
+- `EMBED_BASE`：通常来自 `RAG_EMBEDDING_API_BASE`
+- `EMBED_KEY`：通常来自 `RAG_EMBEDDING_API_KEY`
+- `EMBED_MODEL`：通常来自 `RAG_EMBEDDING_MODEL`
+
+```bash
+export EMBED_BASE="https://api.siliconflow.cn/v1"
+export EMBED_KEY="your-key"
+export EMBED_MODEL="BAAI/bge-m3"
+
+curl -i --max-time 60 \
+  "$EMBED_BASE/embeddings" \
+  -H "Authorization: Bearer $EMBED_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"$EMBED_MODEL\",\"input\":\"测试 embedding 连通性\"}"
+```
+
+重点看：
+
+- HTTP 状态码是否为 `200`
+- 返回体是否包含 `data`
+- 如果报“请求路径错误”，看是不是 `EMBED_BASE` 多了或少了 `/v1`
+
+### 9.2 验证 LLM 接口
+
+将下面的变量替换成你线上实际值：
+
+- `LLM_BASE`：通常来自 `RAG_LLM_API_BASE`
+- `LLM_KEY`：通常来自 `RAG_LLM_API_KEY`
+- `LLM_MODEL`：通常来自 `RAG_LLM_MODEL`
+
+```bash
+export LLM_BASE="https://api.siliconflow.cn/v1"
+export LLM_KEY="your-key"
+export LLM_MODEL="Qwen/Qwen3-32B"
+
+curl -i --max-time 60 \
+  "$LLM_BASE/chat/completions" \
+  -H "Authorization: Bearer $LLM_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"$LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"只回复：ok\"}],\"temperature\":0}"
+```
+
+重点看：
+
+- HTTP 状态码是否为 `200`
+- 返回体是否包含 `choices`
+- 如果报 `404`、`50002` 或“请求路径错误”，大概率是代理路径配置不对
+
+### 9.3 快速判断 `/v1` 是否重复或缺失
+
+如果你们内网做了模型代理，最常见错误是：
+
+- 实际应配 `https://xxx-proxy/v1`，却写成了 `https://xxx-proxy`
+- 实际应配 `https://xxx-proxy`，却写成了 `https://xxx-proxy/v1`
+
+可以直接对比下面两种：
+
+```bash
+curl -i "$EMBED_BASE/embeddings" ...
+curl -i "${EMBED_BASE%/v1}/v1/embeddings" ...
+```
+
+如果只有其中一种能通，说明问题就是 `api_base` 路径前缀不一致。
+
+### 9.4 验证 DNS 与网络连通性
+
+如果 `curl` 超时或连不上，可以继续验证：
+
+```bash
+getent hosts api.siliconflow.cn
+```
+
+```bash
+curl -I --max-time 20 https://api.siliconflow.cn
+```
+
+如果是你们内网代理域名，就把域名替换成代理域名。
+
+### 9.5 验证当前进程实际环境变量
+
+如果怀疑容器里读取到的不是你以为的 `.env.prod`，可以直接在容器里执行：
+
+```bash
+python - <<'PY'
+from config.env import RAGConfig
+print("RAG_LLM_API_BASE =", RAGConfig.rag_llm_api_base)
+print("RAG_LLM_MODEL =", RAGConfig.rag_llm_model)
+print("RAG_EMBEDDING_API_BASE =", RAGConfig.rag_embedding_api_base)
+print("RAG_EMBEDDING_MODEL =", RAGConfig.rag_embedding_model)
+PY
+```
+
+如果这里打印出来的值和你部署预期不一致，优先检查：
+
+- `docker-compose-prod.yml` 的 `env_file`
+- 容器是否用了旧镜像/旧配置
+- `.env.prod` 是否真的在部署机上被更新
+
+## 10. 建议记录模板
 
 建议用下面格式记录一次排查：
 
@@ -177,7 +289,7 @@ LLM 日志：
 - 修复动作：
 ```
 
-## 10. 重点配置文件
+## 11. 重点配置文件
 
 排查时建议同时核对：
 
