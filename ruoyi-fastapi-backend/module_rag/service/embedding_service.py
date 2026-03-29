@@ -6,9 +6,7 @@ from loguru import logger
 
 
 class EmbeddingService:
-    """
-    向量化服务
-    """
+    """Embedding service wrapper."""
 
     _instance: Optional['EmbeddingService'] = None
     _embed_model: Optional[OpenAIEmbedding] = None
@@ -23,50 +21,74 @@ class EmbeddingService:
             self._init_embed_model()
 
     def _init_embed_model(self):
-        """
-        初始化Embedding模型
-        """
         self._embed_model = OpenAIEmbedding(
             api_key=RAGConfig.rag_embedding_api_key or 'sk-dummy',
             api_base=RAGConfig.rag_embedding_api_base,
             model_name=RAGConfig.rag_embedding_model,
             embed_batch_size=RAGConfig.rag_embedding_batch_size,
         )
-        logger.info(f'Embedding模型初始化完成: {RAGConfig.rag_embedding_model}')
+        logger.info(
+            'Embedding model initialized: '
+            f'api_base={RAGConfig.rag_embedding_api_base}, '
+            f'model={RAGConfig.rag_embedding_model}, '
+            f'batch_size={RAGConfig.rag_embedding_batch_size}'
+        )
 
     def get_embed_model(self) -> OpenAIEmbedding:
-        """
-        获取Embedding模型实例
-        """
         return self._embed_model
 
     async def get_text_embedding(self, text: str) -> list[float]:
-        """
-        获取单个文本的向量
-        """
         try:
+            logger.info(
+                'Embedding request started: '
+                f'api_base={RAGConfig.rag_embedding_api_base}, '
+                f'model={RAGConfig.rag_embedding_model}, '
+                f'text_length={len(text or "")}'
+            )
             embedding = await self._embed_model.aget_text_embedding(text)
+            logger.info(
+                'Embedding request finished: '
+                f'model={RAGConfig.rag_embedding_model}, '
+                f'vector_dim={len(embedding or [])}'
+            )
             return embedding
-        except Exception as e:
-            logger.error(f'获取文本向量失败: {str(e)}')
-            raise e
+        except Exception as exc:
+            logger.exception(
+                'Embedding request failed: '
+                f'api_base={RAGConfig.rag_embedding_api_base}, '
+                f'model={RAGConfig.rag_embedding_model}, '
+                f'text_length={len(text or "")}, error={exc}'
+            )
+            raise
 
     async def get_text_embeddings(self, texts: list[str]) -> list[list[float]]:
-        """
-        批量获取文本向量
-        """
         try:
+            text_lengths = [len(text or '') for text in texts]
+            logger.info(
+                'Embedding batch request started: '
+                f'api_base={RAGConfig.rag_embedding_api_base}, '
+                f'model={RAGConfig.rag_embedding_model}, '
+                f'batch_count={len(texts)}, text_lengths={text_lengths}'
+            )
             embeddings = await self._embed_model.aget_text_embedding_batch(texts)
+            logger.info(
+                'Embedding batch request finished: '
+                f'model={RAGConfig.rag_embedding_model}, '
+                f'batch_count={len(embeddings or [])}, '
+                f'vector_dim={len((embeddings or [[]])[0]) if embeddings else 0}'
+            )
             return embeddings
-        except Exception as e:
-            logger.error(f'批量获取文本向量失败: {str(e)}')
-            raise e
+        except Exception as exc:
+            logger.exception(
+                'Embedding batch request failed: '
+                f'api_base={RAGConfig.rag_embedding_api_base}, '
+                f'model={RAGConfig.rag_embedding_model}, '
+                f'batch_count={len(texts)}, error={exc}'
+            )
+            raise
 
     @classmethod
     def get_instance(cls) -> 'EmbeddingService':
-        """
-        获取单例实例
-        """
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance

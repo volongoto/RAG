@@ -67,7 +67,7 @@ class RagDocument(Base):
         server_default=SqlalchemyUtil.get_server_default_null(DataBaseConfig.db_type),
         comment='File size (bytes)',
     )
-    file_type = Column(String(20), nullable=False, comment='File type: docx/pdf')
+    file_type = Column(String(20), nullable=False, comment='File type: doc/docx/pdf')
     chunk_count = Column(Integer, nullable=True, server_default='0', comment='Chunk count')
     parse_status = Column(
         CHAR(1),

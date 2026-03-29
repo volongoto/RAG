@@ -18,6 +18,8 @@ from utils.log_util import logger
 class DocumentStorageService:
     """Document storage abstraction for local disk and optional MinIO."""
 
+    MAX_DB_FILE_NAME_LENGTH = 255
+    MAX_STORAGE_FILE_NAME_LENGTH = 120
     _client: Minio | None = None
     _bucket_ready = False
 
@@ -36,8 +38,30 @@ class DocumentStorageService:
         return normalized or f'document-{uuid.uuid4().hex}'
 
     @classmethod
+    def _truncate_file_name(cls, file_name: str, max_length: int) -> str:
+        normalized = cls._normalize_file_name(file_name)
+        if len(normalized) <= max_length:
+            return normalized
+
+        suffix = Path(normalized).suffix
+        stem = Path(normalized).stem
+        hash_suffix = uuid.uuid5(uuid.NAMESPACE_URL, normalized).hex[:8]
+        reserved_length = len(suffix) + len(hash_suffix) + 1
+        available_stem_length = max(1, max_length - reserved_length)
+        truncated_stem = stem[:available_stem_length]
+        return f'{truncated_stem}_{hash_suffix}{suffix}'
+
+    @classmethod
+    def normalize_db_file_name(cls, file_name: str) -> str:
+        return cls._truncate_file_name(file_name, cls.MAX_DB_FILE_NAME_LENGTH)
+
+    @classmethod
+    def normalize_storage_file_name(cls, file_name: str) -> str:
+        return cls._truncate_file_name(file_name, cls.MAX_STORAGE_FILE_NAME_LENGTH)
+
+    @classmethod
     def _build_storage_key(cls, kb_id: int, file_name: str) -> str:
-        safe_name = cls._normalize_file_name(file_name)
+        safe_name = cls.normalize_storage_file_name(file_name)
         return f"rag/{kb_id}/{datetime.now():%Y%m%d%H%M%S}_{uuid.uuid4().hex}_{safe_name}"
 
     @classmethod

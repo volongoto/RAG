@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 
 import Cookies from 'js-cookie'
+import { SizeKey } from '@/utils/auth'
 
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
@@ -78,7 +79,7 @@ directive(app)
 app.use(ElementPlus, {
   locale: locale,
   // 支持 large、default、small
-  size: Cookies.get('size') || 'default'
+  size: Cookies.get(SizeKey) || 'default'
 })
 
 app.mount('#app')

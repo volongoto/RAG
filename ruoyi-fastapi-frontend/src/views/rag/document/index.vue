@@ -273,7 +273,7 @@ import { listKnowledgeBase } from "@/api/rag/knowledgeBase";
 const LARGE_HINT_FILE_COUNT_THRESHOLD = 100;
 const LARGE_HINT_TOTAL_SIZE_BYTES = 1024 * 1024 * 1024;
 const DEFAULT_UPLOAD_POLICY = Object.freeze({
-  allowedExtensions: ["pdf", "docx"],
+  allowedExtensions: ["pdf", "doc", "docx"],
   submitConcurrency: 2,
   queueSize: 0,
   maxTotalSizeBytes: 0,

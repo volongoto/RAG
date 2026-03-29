@@ -1,5 +1,6 @@
 import defaultSettings from '@/settings'
 import { useDark, useToggle } from '@vueuse/core'
+import { LayoutSettingKey } from '@/utils/auth'
 import { useDynamicTitle } from '@/utils/dynamicTitle'
 
 const isDark = useDark()
@@ -20,9 +21,9 @@ const {
 
 function getStorageSetting() {
   try {
-    return JSON.parse(localStorage.getItem('layout-setting') || '{}')
+    return JSON.parse(localStorage.getItem(LayoutSettingKey) || '{}')
   } catch (error) {
-    console.warn('invalid layout-setting payload', error)
+    console.warn(`invalid ${LayoutSettingKey} payload`, error)
     return {}
   }
 }

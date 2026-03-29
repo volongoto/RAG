@@ -130,6 +130,7 @@
 
 <script setup>
 import { Check } from '@element-plus/icons-vue'
+import { LayoutSettingKey } from '@/utils/auth'
 import useAppStore from '@/store/modules/app'
 import useSettingsStore from '@/store/modules/settings'
 import usePermissionStore from '@/store/modules/permission'
@@ -203,13 +204,13 @@ function saveSetting() {
     routeFx: settingsStore.routeFx,
     requestFx: settingsStore.requestFx
   }
-  localStorage.setItem('layout-setting', JSON.stringify(layoutSetting))
+  localStorage.setItem(LayoutSettingKey, JSON.stringify(layoutSetting))
   setTimeout(() => proxy.$modal.closeLoading(), 320)
 }
 
 function resetSetting() {
   proxy.$modal.loading('正在清除设置缓存并刷新，请稍候...')
-  localStorage.removeItem('layout-setting')
+  localStorage.removeItem(LayoutSettingKey)
   setTimeout(() => {
     window.location.reload()
   }, 360)

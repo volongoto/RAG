@@ -1,16 +1,17 @@
 import Cookies from 'js-cookie'
+import { SidebarStatusKey, SizeKey } from '@/utils/auth'
 
 const useAppStore = defineStore(
   'app',
   {
     state: () => ({
       sidebar: {
-        opened: Cookies.get('sidebarStatus') ? !!+Cookies.get('sidebarStatus') : true,
+        opened: Cookies.get(SidebarStatusKey) ? !!+Cookies.get(SidebarStatusKey) : true,
         withoutAnimation: false,
         hide: false
       },
       device: 'desktop',
-      size: Cookies.get('size') || 'default'
+      size: Cookies.get(SizeKey) || 'default'
     }),
     actions: {
       toggleSideBar(withoutAnimation) {
@@ -20,13 +21,13 @@ const useAppStore = defineStore(
         this.sidebar.opened = !this.sidebar.opened
         this.sidebar.withoutAnimation = withoutAnimation
         if (this.sidebar.opened) {
-          Cookies.set('sidebarStatus', 1)
+          Cookies.set(SidebarStatusKey, 1)
         } else {
-          Cookies.set('sidebarStatus', 0)
+          Cookies.set(SidebarStatusKey, 0)
         }
       },
       closeSideBar({ withoutAnimation }) {
-        Cookies.set('sidebarStatus', 0)
+        Cookies.set(SidebarStatusKey, 0)
         this.sidebar.opened = false
         this.sidebar.withoutAnimation = withoutAnimation
       },
@@ -35,7 +36,7 @@ const useAppStore = defineStore(
       },
       setSize(size) {
         this.size = size;
-        Cookies.set('size', size)
+        Cookies.set(SizeKey, size)
       },
       toggleSideBarHide(status) {
         this.sidebar.hide = status

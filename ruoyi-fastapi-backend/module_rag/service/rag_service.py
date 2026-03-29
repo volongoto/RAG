@@ -35,6 +35,13 @@ class RAGEngine:
         self.embedding_service = EmbeddingService.get_instance()
 
     def _init_llm(self):
+        logger.info(
+            'LLM client initialized: '
+            f'api_base={RAGConfig.rag_llm_api_base}, '
+            f'model={RAGConfig.rag_llm_model}, '
+            f'temperature={RAGConfig.rag_llm_temperature}, '
+            f'max_tokens={RAGConfig.rag_llm_max_tokens}'
+        )
         return OpenAILike(
             api_key=RAGConfig.rag_llm_api_key or 'sk-dummy',
             api_base=RAGConfig.rag_llm_api_base,
@@ -102,6 +109,12 @@ class RAGEngine:
         """Execute retrieval + generation."""
         start_time = datetime.now()
         try:
+            logger.info(
+                'RAGEngine.query started: '
+                f'kb_ids={kb_ids}, top_k={top_k}, threshold={threshold}, '
+                f'retrieval_mode={retrieval_mode}, answer_mode={answer_mode}, '
+                f'query_length={len((query_text or "").strip())}'
+            )
             normalized_answer_mode = self._normalize_answer_mode(answer_mode)
 
             era_mismatch_answer = self._build_era_mismatch_answer(query_text)
@@ -121,6 +134,10 @@ class RAGEngine:
                 retrieval_mode=retrieval_mode,
             )
             source_chunks = retrieve_result.get('chunks', [])
+            logger.info(
+                'RAGEngine.query retrieve completed: '
+                f'kb_ids={kb_ids}, retrieval_mode={retrieval_mode}, source_chunk_count={len(source_chunks)}'
+            )
             if not source_chunks:
                 return {
                     'answer_text': '在所选知识库中未检索到与问题相关的信息。',
@@ -345,6 +362,13 @@ class RAGEngine:
             '\n其次，',
             '\n让我思考',
         ]
+        logger.info(
+            'LLM completion request started: '
+            f'api_base={RAGConfig.rag_llm_api_base}, '
+            f'model={RAGConfig.rag_llm_model}, '
+            f'prompt_length={len(prompt or "")}, '
+            f'stop_sequence_count={len(stop_sequences)}'
+        )
         try:
             response = await self.llm.acomplete(prompt, stop=stop_sequences)
         except TypeError:
@@ -352,7 +376,12 @@ class RAGEngine:
                 response = await self.llm.acomplete(prompt, stop_sequences=stop_sequences)
             except TypeError:
                 response = await self.llm.acomplete(prompt)
-        return str(response).strip()
+        response_text = str(response).strip()
+        logger.info(
+            'LLM completion request finished: '
+            f'model={RAGConfig.rag_llm_model}, response_length={len(response_text)}'
+        )
+        return response_text
 
     async def _sanitize_model_output(self, answer: str) -> str:
         text = (answer or '').strip()
@@ -1243,10 +1272,20 @@ class DocumentService:
                 doc_file_type = doc.file_type
                 doc_file_path = doc.file_path
                 doc_file_name = doc.file_name
+                logger.info(
+                    'Document parsing started: '
+                    f'doc_id={doc_id}, kb_id={doc_kb_id}, file_name={doc_file_name}, '
+                    f'file_type={doc_file_type}, stored_path={doc_file_path}'
+                )
 
                 parser = DocumentParserFactory.get_parser(doc_file_type)
                 parse_file_path, should_cleanup_parse_file = await DocumentStorageService.prepare_parse_file(
                     doc_file_path, doc_file_name
+                )
+                logger.info(
+                    'Document parse source prepared: '
+                    f'doc_id={doc_id}, parse_file_path={parse_file_path}, '
+                    f'should_cleanup={should_cleanup_parse_file}'
                 )
 
                 await cls._set_progress(redis, doc_id, 5, 'Preparing document parsing')
