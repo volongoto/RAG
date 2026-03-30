@@ -178,7 +178,7 @@ docker pull --platform linux/arm64 minio/minio:RELEASE.2025-02-28T09-55-16Z
 ### 6.4 导出 ARM64 离线镜像包
 
 ```bash
-docker image save -o cradle-prod-images-arm64.tar \
+docker  save -o cradle-prod-images-arm64.tar \
   cradle-frontend:prod-arm64 \
   cradle-backend:prod-arm64 \
   pgvector/pgvector:pg17 \
@@ -189,7 +189,7 @@ docker image save -o cradle-prod-images-arm64.tar \
 ### 6.5 ARM64 镜像校验
 
 ```bash
-docker image inspect cradle-frontend:prod-arm64 --format '{{.Architecture}}'
+docker  inspect cradle-frontend:prod-arm64 --format '{{.Architecture}}'
 docker image inspect cradle-backend:prod-arm64 --format '{{.Architecture}}'
 ```
 
@@ -374,3 +374,4 @@ docker build -t cradle-frontend:prod --build-arg BUILD_MODE=prod ./ruoyi-fastapi
 - 将 `lists` 提升到 `sqrt(row_count)` 量级重新建索引
 - 将冷数据迁移到归档库
 - 结合业务压测调整 `ivfflat.probes`
+

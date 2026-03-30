@@ -10,8 +10,8 @@ from typing import Any
 from config.env import RAGConfig
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableLambda
-from llama_index.llms.openai_like import OpenAILike
 from loguru import logger
+from openai import AsyncOpenAI
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,23 +35,30 @@ class RAGEngine:
         self.embedding_service = EmbeddingService.get_instance()
 
     def _init_llm(self):
+        base_url = self._normalize_openai_base_url(RAGConfig.rag_llm_api_base)
         logger.info(
             'LLM client initialized: '
-            f'api_base={RAGConfig.rag_llm_api_base}, '
+            f'api_base={base_url}, '
             f'model={RAGConfig.rag_llm_model}, '
             f'temperature={RAGConfig.rag_llm_temperature}, '
             f'max_tokens={RAGConfig.rag_llm_max_tokens}'
         )
-        return OpenAILike(
+        return AsyncOpenAI(
             api_key=RAGConfig.rag_llm_api_key or 'sk-dummy',
-            api_base=RAGConfig.rag_llm_api_base,
-            model=RAGConfig.rag_llm_model,
-            temperature=RAGConfig.rag_llm_temperature,
-            max_tokens=RAGConfig.rag_llm_max_tokens,
+            base_url=base_url or None,
         )
 
     def _init_output_cleaner(self):
         return RunnableLambda(self._remove_output_artifacts, name='sanitize_rag_answer') | StrOutputParser()
+
+    @staticmethod
+    def _normalize_openai_base_url(url: str | None) -> str:
+        normalized = str(url or '').strip().rstrip('/')
+        if (normalized.startswith("'") and normalized.endswith("'")) or (
+            normalized.startswith('"') and normalized.endswith('"')
+        ):
+            normalized = normalized[1:-1].strip().rstrip('/')
+        return normalized
 
     async def retrieve(
         self,
@@ -369,14 +376,26 @@ class RAGEngine:
             f'prompt_length={len(prompt or "")}, '
             f'stop_sequence_count={len(stop_sequences)}'
         )
-        try:
-            response = await self.llm.acomplete(prompt, stop=stop_sequences)
-        except TypeError:
-            try:
-                response = await self.llm.acomplete(prompt, stop_sequences=stop_sequences)
-            except TypeError:
-                response = await self.llm.acomplete(prompt)
-        response_text = str(response).strip()
+        request_kwargs: dict[str, Any] = {
+            'model': RAGConfig.rag_llm_model,
+            'messages': [{'role': 'user', 'content': prompt}],
+            'temperature': float(RAGConfig.rag_llm_temperature or 0),
+        }
+        if int(RAGConfig.rag_llm_max_tokens or 0) > 0:
+            request_kwargs['max_tokens'] = int(RAGConfig.rag_llm_max_tokens)
+        if stop_sequences:
+            request_kwargs['stop'] = stop_sequences
+        logger.info(
+            'LLM chat request payload prepared: '
+            f'model={request_kwargs["model"]}, '
+            f'message_count={len(request_kwargs["messages"])}, '
+            f'has_stop={"stop" in request_kwargs}, '
+            f'has_max_tokens={"max_tokens" in request_kwargs}'
+        )
+        response = await self.llm.chat.completions.create(**request_kwargs)
+        response_text = ''
+        if response and response.choices:
+            response_text = str(response.choices[0].message.content or '').strip()
         logger.info(
             'LLM completion request finished: '
             f'model={RAGConfig.rag_llm_model}, response_length={len(response_text)}'
