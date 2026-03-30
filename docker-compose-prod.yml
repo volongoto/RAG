@@ -6,6 +6,9 @@
 #   /opt/cradle/data/cradle-db -> PostgreSQL data
 #   /opt/cradle/deploy/postgres/postgresql.prod.conf -> PostgreSQL config
 #   /opt/cradle/ruoyi-fastapi-backend/.env.prod -> backend production env
+# MinIO supports two modes:
+# 1. external/shared MinIO configured via ruoyi-fastapi-backend/.env.prod
+# 2. local MinIO started from this compose file with profile `local-minio`
 x-logging: &default-logging
   driver: json-file
   options:
@@ -46,8 +49,6 @@ services:
         condition: service_healthy
       cradle-redis:
         condition: service_healthy
-      cradle-minio:
-        condition: service_started
     healthcheck:
       test:
         [
@@ -127,6 +128,8 @@ services:
     logging: *default-logging
 
   cradle-minio:
+    profiles:
+      - local-minio
     image: minio/minio:RELEASE.2025-02-28T09-55-16Z
     container_name: cradle-minio
     restart: unless-stopped
