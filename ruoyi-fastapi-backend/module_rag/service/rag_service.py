@@ -60,6 +60,37 @@ class RAGEngine:
             normalized = normalized[1:-1].strip().rstrip('/')
         return normalized
 
+    @staticmethod
+    def _normalize_bool_like(value: Any) -> bool | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if not text:
+            return None
+        if text in {'1', 'true', 'yes', 'on'}:
+            return True
+        if text in {'0', 'false', 'no', 'off'}:
+            return False
+        return None
+
+    def _resolve_enable_thinking(self) -> bool | None:
+        configured_value = self._normalize_bool_like(getattr(RAGConfig, 'rag_llm_enable_thinking', None))
+        if configured_value is not None:
+            return configured_value
+
+        model_name = str(getattr(RAGConfig, 'rag_llm_model', '') or '').strip().lower()
+        if 'deepseek-r1' in model_name:
+            return False
+        return None
+
+    def _build_llm_extra_body(self) -> dict[str, Any]:
+        enable_thinking = self._resolve_enable_thinking()
+        if enable_thinking is None:
+            return {}
+        return {'enable_thinking': enable_thinking}
+
     async def retrieve(
         self,
         query_db: AsyncSession,
@@ -153,8 +184,8 @@ class RAGEngine:
                 }
 
             context = self._build_context(source_chunks)
-            prompt = self._build_prompt(query_text, context, scenario, normalized_answer_mode)
-            raw_answer = await self._generate_answer(prompt)
+            system_prompt, user_prompt = self._build_prompt(query_text, context, scenario, normalized_answer_mode)
+            raw_answer = await self._generate_answer(system_prompt, user_prompt)
             answer = self._post_process_answer(
                 await self._sanitize_model_output(raw_answer),
                 query_text=query_text,
@@ -318,7 +349,7 @@ class RAGEngine:
 
     def _build_prompt(
         self, query: str, context: str, scenario: str | None = None, answer_mode: str = 'detailed'
-    ) -> str:
+    ) -> tuple[str, str]:
         base_rules = (
             '你是企业知识库问答助手，请严格基于参考资料回答。\n'
             '回答规则：\n'
@@ -355,42 +386,41 @@ class RAGEngine:
             style_rules = '7. 输出详细模式：根据问题给出结构化答案与关键依据，避免重复与空话。\n'
 
         return (
-            f'{base_rules}{style_rules}\n'
+            f'{base_rules}{style_rules}\n',
             f'参考资料：\n{context}\n\n'
-            f'用户问题：\n{query}\n'
+            f'用户问题：\n{query}\n',
         )
 
-    async def _generate_answer(self, prompt: str) -> str:
-        stop_sequences = [
-            '\n现在你的任务是',
-            '\n好的，我现在',
-            '\n用户的问题是',
-            '\n首先，',
-            '\n其次，',
-            '\n让我思考',
-        ]
+    async def _generate_answer(self, system_prompt: str, user_prompt: str) -> str:
+        extra_body = self._build_llm_extra_body()
+        enable_thinking = self._resolve_enable_thinking()
         logger.info(
             'LLM completion request started: '
             f'api_base={RAGConfig.rag_llm_api_base}, '
             f'model={RAGConfig.rag_llm_model}, '
-            f'prompt_length={len(prompt or "")}, '
-            f'stop_sequence_count={len(stop_sequences)}'
+            f'system_prompt_length={len(system_prompt or "")}, '
+            f'user_prompt_length={len(user_prompt or "")}, '
+            f'enable_thinking={enable_thinking}'
         )
         request_kwargs: dict[str, Any] = {
             'model': RAGConfig.rag_llm_model,
-            'messages': [{'role': 'user', 'content': prompt}],
+            'messages': [
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': user_prompt},
+            ],
             'temperature': float(RAGConfig.rag_llm_temperature or 0),
         }
         if int(RAGConfig.rag_llm_max_tokens or 0) > 0:
             request_kwargs['max_tokens'] = int(RAGConfig.rag_llm_max_tokens)
-        if stop_sequences:
-            request_kwargs['stop'] = stop_sequences
+        if extra_body:
+            request_kwargs['extra_body'] = extra_body
         logger.info(
             'LLM chat request payload prepared: '
             f'model={request_kwargs["model"]}, '
             f'message_count={len(request_kwargs["messages"])}, '
-            f'has_stop={"stop" in request_kwargs}, '
-            f'has_max_tokens={"max_tokens" in request_kwargs}'
+            f'has_extra_body={"extra_body" in request_kwargs}, '
+            f'has_max_tokens={"max_tokens" in request_kwargs}, '
+            f'enable_thinking={enable_thinking}'
         )
         response = await self.llm.chat.completions.create(**request_kwargs)
         response_text = ''
@@ -398,7 +428,8 @@ class RAGEngine:
             response_text = str(response.choices[0].message.content or '').strip()
         logger.info(
             'LLM completion request finished: '
-            f'model={RAGConfig.rag_llm_model}, response_length={len(response_text)}'
+            f'model={RAGConfig.rag_llm_model}, response_length={len(response_text)}, '
+            f'response_preview={response_text[:120]!r}'
         )
         return response_text
 
@@ -407,11 +438,18 @@ class RAGEngine:
         if not text:
             return ''
 
+        text = self._strip_thinking_block(text)
         try:
-            return str(await self.output_cleaner.ainvoke(text)).strip()
+            cleaned = str(await self.output_cleaner.ainvoke(text)).strip()
         except Exception as exc:
             logger.warning(f'LangChain output cleaner failed, fallback to local sanitizer: {exc}')
-            return self._remove_output_artifacts(text)
+            cleaned = self._remove_output_artifacts(text)
+
+        cleaned = self._strip_reasoning_leakage(cleaned)
+        if self._is_low_value_acknowledgement(cleaned):
+            logger.warning(f'LLM output reduced to acknowledgement-only content: {cleaned!r}')
+            return ''
+        return cleaned
 
     def _remove_output_artifacts(self, text: str) -> str:
         cleaned = (text or '').replace('\r\n', '\n').replace('\r', '\n').strip()
@@ -436,6 +474,52 @@ class RAGEngine:
         cleaned = re.sub(r'[ \t]+', ' ', cleaned)
         cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
         return cleaned.strip()
+
+    @staticmethod
+    def _strip_thinking_block(text: str) -> str:
+        normalized = (text or '').replace('\r\n', '\n').replace('\r', '\n').strip()
+        if not normalized:
+            return ''
+
+        cleaned = re.sub(
+            r'<\s*think(?:ing)?\b[^>]*>[\s\S]*?<\s*/\s*think(?:ing)?\s*>',
+            ' ',
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        close_match = re.search(r'<\s*/\s*think(?:ing)?\s*>', cleaned, flags=re.IGNORECASE)
+        if close_match:
+            cleaned = cleaned[close_match.end() :].strip()
+        cleaned = re.sub(r'<\s*/?\s*think(?:ing)?\b[^>]*>', ' ', cleaned, flags=re.IGNORECASE).strip()
+        return cleaned or normalized
+
+    @staticmethod
+    def _is_low_value_acknowledgement(text: str) -> bool:
+        normalized = re.sub(r'[\s，,。.!！？；;：:]+', '', text or '').lower()
+        if not normalized:
+            return True
+
+        if normalized in {
+            '好',
+            '好的',
+            '收到',
+            '明白',
+            '嗯',
+            '好的我来分析',
+            '好的我现在分析',
+            '让我分析',
+            '让我思考',
+            '我来分析',
+            '请稍等',
+            '稍等',
+            '正在分析',
+        }:
+            return True
+
+        return len(normalized) <= 12 and any(
+            normalized.startswith(prefix)
+            for prefix in ('好的我来', '好的我现在', '让我', '我来', '请稍等', '稍等', '正在')
+        )
 
     def _post_process_answer(
         self, answer: str, query_text: str = '', scenario: str | None = None, answer_mode: str = 'detailed'
