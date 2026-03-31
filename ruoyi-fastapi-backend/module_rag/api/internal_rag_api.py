@@ -55,8 +55,4 @@ async def query_knowledge_bases(
     query_db: Annotated[AsyncSession, DBSessionDependency()],
 ) -> Response:
     result = await InternalRagBridgeService.query_knowledge_bases(query_db, payload.principal, payload.query)
-    logger.info(
-        f'Internal RAG query finished source={payload.principal.source_system} '
-        f'external_user={payload.principal.external_user_id or payload.principal.external_user_name or "-"}'
-    )
     return ResponseUtil.success(data=result)

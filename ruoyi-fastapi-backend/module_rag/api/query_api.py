@@ -16,7 +16,6 @@ from module_rag.entity.do.rag_do import RagKnowledgeBase
 from module_rag.entity.vo.rag_vo import QueryLogQueryModel, QueryRequestModel, QueryResponseModel
 from module_rag.service.knowledge_base_service import KnowledgeBaseDataScope, KnowledgeBaseService
 from module_rag.service.query_service import QueryService
-from utils.log_util import logger
 from utils.response_util import ResponseUtil
 
 query_controller = APIRouterPro(
@@ -39,31 +38,12 @@ async def execute_query(
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
     data_scope_sql: Annotated[ColumnElement, Depends(KnowledgeBaseDataScope(RagKnowledgeBase))],
 ) -> Response:
-    logger.info(
-        'RAG query request received: '
-        f'path={request.url.path}, '
-        f'root_path={request.scope.get("root_path", "")}, '
-        f'user_id={current_user.user.user_id}, '
-        f'kb_ids={query_request.kb_ids}, '
-        f'top_k={query_request.top_k}, '
-        f'retrieval_mode={query_request.retrieval_mode}, '
-        f'answer_mode={query_request.answer_mode}, '
-        f'query_length={len((query_request.query_text or "").strip())}'
-    )
-
     if not current_user.user.admin:
         for kb_id in query_request.kb_ids or []:
             await KnowledgeBaseService.check_kb_data_scope_services(query_db, kb_id, data_scope_sql)
 
     query_service = QueryService()
     query_result = await query_service.query_services(query_db, query_request, current_user.user.user_id)
-    logger.info(
-        'RAG query finished: '
-        f'user_id={current_user.user.user_id}, '
-        f'kb_ids={query_request.kb_ids}, '
-        f'response_time={query_result.response_time}, '
-        f'source_chunk_count={len(query_result.source_chunks or [])}'
-    )
     return ResponseUtil.success(data=query_result)
 
 

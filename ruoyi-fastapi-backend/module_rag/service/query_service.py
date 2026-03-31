@@ -7,7 +7,6 @@ from module_rag.entity.vo.rag_vo import QueryLogQueryModel, QueryRequestModel, Q
 from module_rag.entity.vo.runtime_vo import RetrieveRequestModel, RetrieveResponseModel
 from module_rag.service.rag_service import RAGEngine
 from utils.common_util import CamelCaseUtil
-from utils.log_util import logger
 
 
 class QueryService:
@@ -25,13 +24,6 @@ class QueryService:
     ) -> QueryResponseModel:
         start_time = datetime.now()
         query_text = (query_request.query_text or '').strip()
-        logger.info(
-            'QueryService.query_services started: '
-            f'user_id={user_id}, kb_ids={query_request.kb_ids}, '
-            f'top_k={query_request.top_k}, retrieval_mode={query_request.retrieval_mode}, '
-            f'answer_mode={query_request.answer_mode}, query_length={len(query_text)}'
-        )
-
         result = await self.rag_engine.query(
             query_db=query_db,
             query_text=query_text,
@@ -43,12 +35,6 @@ class QueryService:
         )
         await self._save_query_log(query_db, query_request, result, user_id, start_time, caller_meta=caller_meta)
         response_model = QueryResponseModel(**CamelCaseUtil.transform_result(result))
-        logger.info(
-            'QueryService.query_services completed: '
-            f'user_id={user_id}, kb_ids={query_request.kb_ids}, '
-            f'response_time={response_model.response_time}, '
-            f'source_chunk_count={len(response_model.source_chunks or [])}'
-        )
         return response_model
 
     async def retrieve_services(

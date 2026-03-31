@@ -5,13 +5,14 @@ import math
 import os
 import re
 from datetime import datetime
+from time import perf_counter
 from typing import Any
 
 from config.env import RAGConfig
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableLambda
 from loguru import logger
-from openai import AsyncOpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +30,9 @@ from module_rag.service.parser.document_parser import DocumentParserFactory
 class RAGEngine:
     """RAG runtime engine."""
 
+    _llm_client: AsyncOpenAI | None = None
+    _llm_client_signature: tuple[str, str, str] | None = None
+
     def __init__(self):
         self.llm = self._init_llm()
         self.output_cleaner = self._init_output_cleaner()
@@ -36,17 +40,25 @@ class RAGEngine:
 
     def _init_llm(self):
         base_url = self._normalize_openai_base_url(RAGConfig.rag_llm_api_base)
-        logger.info(
-            'LLM client initialized: '
-            f'api_base={base_url}, '
-            f'model={RAGConfig.rag_llm_model}, '
-            f'temperature={RAGConfig.rag_llm_temperature}, '
-            f'max_tokens={RAGConfig.rag_llm_max_tokens}'
+        client_signature = (
+            base_url,
+            str(RAGConfig.rag_llm_model or ''),
+            str(RAGConfig.rag_llm_api_key or 'sk-dummy'),
         )
-        return AsyncOpenAI(
-            api_key=RAGConfig.rag_llm_api_key or 'sk-dummy',
-            base_url=base_url or None,
-        )
+        if self.__class__._llm_client is None or self.__class__._llm_client_signature != client_signature:
+            logger.debug(
+                'LLM 客户端初始化完成: '
+                f'api_base={base_url}, '
+                f'model={RAGConfig.rag_llm_model}, '
+                f'temperature={RAGConfig.rag_llm_temperature}, '
+                f'max_tokens={RAGConfig.rag_llm_max_tokens}'
+            )
+            self.__class__._llm_client = AsyncOpenAI(
+                api_key=RAGConfig.rag_llm_api_key or 'sk-dummy',
+                base_url=base_url or None,
+            )
+            self.__class__._llm_client_signature = client_signature
+        return self.__class__._llm_client
 
     def _init_output_cleaner(self):
         return RunnableLambda(self._remove_output_artifacts, name='sanitize_rag_answer') | StrOutputParser()
@@ -91,6 +103,97 @@ class RAGEngine:
             return {}
         return {'enable_thinking': enable_thinking}
 
+    @staticmethod
+    def _elapsed_ms(start_time: float) -> int:
+        return int((perf_counter() - start_time) * 1000)
+
+    async def _retrieve_chunks_with_metrics(
+        self,
+        *,
+        query_db: AsyncSession,
+        query_text: str,
+        kb_ids: list[int],
+        top_k: int,
+        threshold: float,
+        retrieval_mode: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        stage_start = perf_counter()
+        mode = (retrieval_mode or 'hybrid').lower()
+        if mode not in ('vector', 'lexical', 'hybrid'):
+            mode = 'hybrid'
+
+        metrics: dict[str, Any] = {
+            'retrieval_mode': mode,
+            'embedding_ms': 0,
+            'db_ms': 0,
+            'retrieval_ms': 0,
+            'vector_embedding_ms': 0,
+            'vector_db_ms': 0,
+            'lexical_db_ms': 0,
+            'fallback_embedding_ms': 0,
+            'fallback_vector_db_ms': 0,
+            'fallback_embedding_reused': False,
+            'threshold_fallback_used': False,
+            'vector_chunk_count': 0,
+            'lexical_chunk_count': 0,
+            'source_chunk_count': 0,
+        }
+
+        query_embedding: list[float] | None = None
+        vector_chunks: list[dict[str, Any]] = []
+        if mode in ('vector', 'hybrid'):
+            vector_embedding_start = perf_counter()
+            query_embedding = await self.embedding_service.get_text_embedding(query_text)
+            metrics['vector_embedding_ms'] = self._elapsed_ms(vector_embedding_start)
+            metrics['embedding_ms'] += metrics['vector_embedding_ms']
+
+            vector_db_start = perf_counter()
+            vector_rows = await ChunkDao.similarity_search(query_db, kb_ids, query_embedding, top_k, threshold)
+            metrics['vector_db_ms'] = self._elapsed_ms(vector_db_start)
+            metrics['db_ms'] += metrics['vector_db_ms']
+            vector_chunks = [self._normalize_vector_row(row) for row in vector_rows]
+            metrics['vector_chunk_count'] = len(vector_chunks)
+
+        lexical_chunks: list[dict[str, Any]] = []
+        if mode in ('lexical', 'hybrid'):
+            lexical_db_start = perf_counter()
+            lexical_rows = await ChunkDao.lexical_search(query_db, kb_ids, query_text, top_k)
+            metrics['lexical_db_ms'] = self._elapsed_ms(lexical_db_start)
+            metrics['db_ms'] += metrics['lexical_db_ms']
+            lexical_chunks = [self._normalize_lexical_row(row) for row in lexical_rows]
+            metrics['lexical_chunk_count'] = len(lexical_chunks)
+
+        if mode in ('vector', 'hybrid') and not vector_chunks and threshold > 0:
+            metrics['threshold_fallback_used'] = True
+
+            if query_embedding is None:
+                fallback_embedding_start = perf_counter()
+                query_embedding = await self.embedding_service.get_text_embedding(query_text)
+                metrics['fallback_embedding_ms'] = self._elapsed_ms(fallback_embedding_start)
+                metrics['embedding_ms'] += metrics['fallback_embedding_ms']
+            else:
+                metrics['fallback_embedding_reused'] = True
+
+            fallback_vector_db_start = perf_counter()
+            vector_rows = await ChunkDao.similarity_search(query_db, kb_ids, query_embedding, top_k, 0.0)
+            metrics['fallback_vector_db_ms'] = self._elapsed_ms(fallback_vector_db_start)
+            metrics['db_ms'] += metrics['fallback_vector_db_ms']
+            vector_chunks = [self._normalize_vector_row(row) for row in vector_rows]
+            metrics['vector_chunk_count'] = len(vector_chunks)
+
+        if mode == 'vector':
+            result_chunks = vector_chunks[:top_k]
+        elif mode == 'lexical':
+            result_chunks = lexical_chunks[:top_k]
+        elif not vector_chunks and not lexical_chunks:
+            result_chunks = []
+        else:
+            result_chunks = self._hybrid_fuse(vector_chunks, lexical_chunks, top_k)
+
+        metrics['source_chunk_count'] = len(result_chunks)
+        metrics['retrieval_ms'] = self._elapsed_ms(stage_start)
+        return result_chunks, metrics
+
     async def retrieve(
         self,
         query_db: AsyncSession,
@@ -115,7 +218,7 @@ class RAGEngine:
             top_k = top_k if top_k is not None else RAGConfig.rag_top_k
             threshold = threshold if threshold is not None else RAGConfig.rag_similarity_threshold
 
-            chunks = await self._retrieve_chunks(
+            chunks, retrieval_metrics = await self._retrieve_chunks_with_metrics(
                 query_db=query_db,
                 query_text=query_text,
                 kb_ids=kb_ids,
@@ -125,6 +228,24 @@ class RAGEngine:
             )
 
             response_time = int((datetime.now() - start_time).total_seconds() * 1000)
+            logger.info(
+                'RAG 检索完成: '
+                f'kb_ids={kb_ids}, retrieval_mode={retrieval_metrics["retrieval_mode"]}, '
+                f'embedding_ms={retrieval_metrics["embedding_ms"]}, '
+                f'db_ms={retrieval_metrics["db_ms"]}, '
+                f'retrieval_ms={retrieval_metrics["retrieval_ms"]}, '
+                f'vector_embedding_ms={retrieval_metrics["vector_embedding_ms"]}, '
+                f'vector_db_ms={retrieval_metrics["vector_db_ms"]}, '
+                f'lexical_db_ms={retrieval_metrics["lexical_db_ms"]}, '
+                f'fallback_embedding_ms={retrieval_metrics["fallback_embedding_ms"]}, '
+                f'fallback_vector_db_ms={retrieval_metrics["fallback_vector_db_ms"]}, '
+                f'fallback_embedding_reused={retrieval_metrics["fallback_embedding_reused"]}, '
+                f'threshold_fallback_used={retrieval_metrics["threshold_fallback_used"]}, '
+                f'vector_chunk_count={retrieval_metrics["vector_chunk_count"]}, '
+                f'lexical_chunk_count={retrieval_metrics["lexical_chunk_count"]}, '
+                f'source_chunk_count={retrieval_metrics["source_chunk_count"]}, '
+                f'total_ms={response_time}'
+            )
             return {
                 'chunks': self._format_source_chunks(chunks),
                 'response_time': response_time,
@@ -146,9 +267,26 @@ class RAGEngine:
     ) -> dict[str, Any]:
         """Execute retrieval + generation."""
         start_time = datetime.now()
+        llm_ms = 0
+        retrieval_metrics: dict[str, Any] = {
+            'retrieval_mode': (retrieval_mode or 'hybrid').lower(),
+            'embedding_ms': 0,
+            'db_ms': 0,
+            'retrieval_ms': 0,
+            'vector_embedding_ms': 0,
+            'vector_db_ms': 0,
+            'lexical_db_ms': 0,
+            'fallback_embedding_ms': 0,
+            'fallback_vector_db_ms': 0,
+            'fallback_embedding_reused': False,
+            'threshold_fallback_used': False,
+            'vector_chunk_count': 0,
+            'lexical_chunk_count': 0,
+            'source_chunk_count': 0,
+        }
         try:
             logger.info(
-                'RAGEngine.query started: '
+                'RAG 查询开始: '
                 f'kb_ids={kb_ids}, top_k={top_k}, threshold={threshold}, '
                 f'retrieval_mode={retrieval_mode}, answer_mode={answer_mode}, '
                 f'query_length={len((query_text or "").strip())}'
@@ -163,7 +301,10 @@ class RAGEngine:
                     'response_time': int((datetime.now() - start_time).total_seconds() * 1000),
                 }
 
-            retrieve_result = await self.retrieve(
+            top_k = top_k if top_k is not None else RAGConfig.rag_top_k
+            threshold = threshold if threshold is not None else RAGConfig.rag_similarity_threshold
+
+            chunks, retrieval_metrics = await self._retrieve_chunks_with_metrics(
                 query_db=query_db,
                 query_text=query_text,
                 kb_ids=kb_ids,
@@ -171,33 +312,70 @@ class RAGEngine:
                 threshold=threshold,
                 retrieval_mode=retrieval_mode,
             )
-            source_chunks = retrieve_result.get('chunks', [])
+            source_chunks = self._format_source_chunks(chunks)
             logger.info(
-                'RAGEngine.query retrieve completed: '
-                f'kb_ids={kb_ids}, retrieval_mode={retrieval_mode}, source_chunk_count={len(source_chunks)}'
+                'RAG 检索完成: '
+                f'kb_ids={kb_ids}, retrieval_mode={retrieval_metrics["retrieval_mode"]}, '
+                f'source_chunk_count={len(source_chunks)}, '
+                f'embedding_ms={retrieval_metrics["embedding_ms"]}, '
+                f'db_ms={retrieval_metrics["db_ms"]}, '
+                f'retrieval_ms={retrieval_metrics["retrieval_ms"]}, '
+                f'vector_embedding_ms={retrieval_metrics["vector_embedding_ms"]}, '
+                f'vector_db_ms={retrieval_metrics["vector_db_ms"]}, '
+                f'lexical_db_ms={retrieval_metrics["lexical_db_ms"]}, '
+                f'fallback_embedding_ms={retrieval_metrics["fallback_embedding_ms"]}, '
+                f'fallback_vector_db_ms={retrieval_metrics["fallback_vector_db_ms"]}, '
+                f'fallback_embedding_reused={retrieval_metrics["fallback_embedding_reused"]}, '
+                f'threshold_fallback_used={retrieval_metrics["threshold_fallback_used"]}'
             )
             if not source_chunks:
                 return {
-                    'answer_text': '在所选知识库中未检索到与问题相关的信息。',
+                    'answer_text': 'No relevant information found in the selected knowledge bases.',
                     'source_chunks': [],
                     'response_time': int((datetime.now() - start_time).total_seconds() * 1000),
                 }
 
             context = self._build_context(source_chunks)
             system_prompt, user_prompt = self._build_prompt(query_text, context, scenario, normalized_answer_mode)
+            llm_start = perf_counter()
             raw_answer = await self._generate_answer(system_prompt, user_prompt)
+            llm_ms = self._elapsed_ms(llm_start)
             answer = self._post_process_answer(
                 await self._sanitize_model_output(raw_answer),
                 query_text=query_text,
                 scenario=scenario,
                 answer_mode=normalized_answer_mode,
             )
+            total_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+            logger.info(
+                'RAG 查询完成: '
+                f'kb_ids={kb_ids}, retrieval_mode={retrieval_metrics["retrieval_mode"]}, '
+                f'embedding_ms={retrieval_metrics["embedding_ms"]}, '
+                f'db_ms={retrieval_metrics["db_ms"]}, '
+                f'llm_ms={llm_ms}, '
+                f'retrieval_ms={retrieval_metrics["retrieval_ms"]}, '
+                f'total_ms={total_ms}, '
+                f'source_chunk_count={len(source_chunks)}, '
+                f'vector_chunk_count={retrieval_metrics["vector_chunk_count"]}, '
+                f'lexical_chunk_count={retrieval_metrics["lexical_chunk_count"]}, '
+                f'fallback_embedding_reused={retrieval_metrics["fallback_embedding_reused"]}, '
+                f'threshold_fallback_used={retrieval_metrics["threshold_fallback_used"]}'
+            )
             return {
                 'answer_text': answer,
                 'source_chunks': source_chunks,
-                'response_time': int((datetime.now() - start_time).total_seconds() * 1000),
+                'response_time': total_ms,
             }
         except Exception as e:
+            logger.error(
+                'RAG query failed with stage breakdown: '
+                f'kb_ids={kb_ids}, retrieval_mode={retrieval_metrics.get("retrieval_mode")}, '
+                f'embedding_ms={retrieval_metrics.get("embedding_ms", 0)}, '
+                f'db_ms={retrieval_metrics.get("db_ms", 0)}, '
+                f'llm_ms={llm_ms}, '
+                f'retrieval_ms={retrieval_metrics.get("retrieval_ms", 0)}, '
+                f'total_ms={int((datetime.now() - start_time).total_seconds() * 1000)}'
+            )
             logger.error(f'RAG query failed: {e}')
             raise ServiceException(message=f'Query failed: {e}')
 
@@ -211,38 +389,15 @@ class RAGEngine:
         threshold: float,
         retrieval_mode: str,
     ) -> list[dict[str, Any]]:
-        mode = (retrieval_mode or 'hybrid').lower()
-        if mode not in ('vector', 'lexical', 'hybrid'):
-            mode = 'hybrid'
-
-        vector_chunks: list[dict[str, Any]] = []
-        if mode in ('vector', 'hybrid'):
-            query_embedding = await self.embedding_service.get_text_embedding(query_text)
-            vector_rows = await ChunkDao.similarity_search(query_db, kb_ids, query_embedding, top_k, threshold)
-            vector_chunks = [self._normalize_vector_row(row) for row in vector_rows]
-
-        # lexical branch
-        lexical_chunks: list[dict[str, Any]] = []
-        if mode in ('lexical', 'hybrid'):
-            lexical_rows = await ChunkDao.lexical_search(query_db, kb_ids, query_text, top_k)
-            lexical_chunks = [self._normalize_lexical_row(row) for row in lexical_rows]
-
-        # threshold fallback for vector/hybrid
-        if mode in ('vector', 'hybrid') and not vector_chunks and threshold > 0:
-            logger.warning(f'No vector chunks with threshold={threshold}, fallback to threshold=0.0')
-            query_embedding = await self.embedding_service.get_text_embedding(query_text)
-            vector_rows = await ChunkDao.similarity_search(query_db, kb_ids, query_embedding, top_k, 0.0)
-            vector_chunks = [self._normalize_vector_row(row) for row in vector_rows]
-
-        if mode == 'vector':
-            return vector_chunks[:top_k]
-        if mode == 'lexical':
-            return lexical_chunks[:top_k]
-
-        # hybrid mode
-        if not vector_chunks and not lexical_chunks:
-            return []
-        return self._hybrid_fuse(vector_chunks, lexical_chunks, top_k)
+        chunks, _ = await self._retrieve_chunks_with_metrics(
+            query_db=query_db,
+            query_text=query_text,
+            kb_ids=kb_ids,
+            top_k=top_k,
+            threshold=threshold,
+            retrieval_mode=retrieval_mode,
+        )
+        return chunks
 
     @staticmethod
     def _row_get(row: Any, key: str, default: Any = None) -> Any:
@@ -392,16 +547,9 @@ class RAGEngine:
         )
 
     async def _generate_answer(self, system_prompt: str, user_prompt: str) -> str:
+        llm_start = perf_counter()
         extra_body = self._build_llm_extra_body()
         enable_thinking = self._resolve_enable_thinking()
-        logger.info(
-            'LLM completion request started: '
-            f'api_base={RAGConfig.rag_llm_api_base}, '
-            f'model={RAGConfig.rag_llm_model}, '
-            f'system_prompt_length={len(system_prompt or "")}, '
-            f'user_prompt_length={len(user_prompt or "")}, '
-            f'enable_thinking={enable_thinking}'
-        )
         request_kwargs: dict[str, Any] = {
             'model': RAGConfig.rag_llm_model,
             'messages': [
@@ -414,22 +562,49 @@ class RAGEngine:
             request_kwargs['max_tokens'] = int(RAGConfig.rag_llm_max_tokens)
         if extra_body:
             request_kwargs['extra_body'] = extra_body
-        logger.info(
-            'LLM chat request payload prepared: '
-            f'model={request_kwargs["model"]}, '
-            f'message_count={len(request_kwargs["messages"])}, '
-            f'has_extra_body={"extra_body" in request_kwargs}, '
-            f'has_max_tokens={"max_tokens" in request_kwargs}, '
-            f'enable_thinking={enable_thinking}'
-        )
-        response = await self.llm.chat.completions.create(**request_kwargs)
+        try:
+            response = await self.llm.chat.completions.create(**request_kwargs)
+        except APIStatusError as exc:
+            response_text = ''
+            if getattr(exc, 'response', None) is not None:
+                try:
+                    response_text = exc.response.text
+                except Exception:
+                    response_text = repr(exc.response)
+            logger.exception(
+                'LLM 调用失败: '
+                f'model={RAGConfig.rag_llm_model}, '
+                f'api_base={RAGConfig.rag_llm_api_base}, '
+                f'耗时_ms={self._elapsed_ms(llm_start)}, '
+                f'状态码={getattr(exc, "status_code", None)}, '
+                f'响应体={response_text}'
+            )
+            raise
+        except APITimeoutError as exc:
+            logger.exception(
+                'LLM 调用超时: '
+                f'model={RAGConfig.rag_llm_model}, '
+                f'api_base={RAGConfig.rag_llm_api_base}, '
+                f'耗时_ms={self._elapsed_ms(llm_start)}, '
+                f'错误={exc}'
+            )
+            raise
+        except APIConnectionError as exc:
+            logger.exception(
+                'LLM 连接失败: '
+                f'model={RAGConfig.rag_llm_model}, '
+                f'api_base={RAGConfig.rag_llm_api_base}, '
+                f'耗时_ms={self._elapsed_ms(llm_start)}, '
+                f'错误={exc}'
+            )
+            raise
         response_text = ''
         if response and response.choices:
             response_text = str(response.choices[0].message.content or '').strip()
         logger.info(
-            'LLM completion request finished: '
-            f'model={RAGConfig.rag_llm_model}, response_length={len(response_text)}, '
-            f'response_preview={response_text[:120]!r}'
+            'LLM 调用完成: '
+            f'model={RAGConfig.rag_llm_model}, 耗时_ms={self._elapsed_ms(llm_start)}, '
+            f'响应长度={len(response_text)}, 响应预览={response_text[:120]!r}'
         )
         return response_text
 
@@ -1528,4 +1703,3 @@ class DocumentService:
         except Exception:
             await query_db.rollback()
             raise
-

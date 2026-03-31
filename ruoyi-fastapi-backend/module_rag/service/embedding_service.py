@@ -1,4 +1,5 @@
 from typing import Optional
+from time import perf_counter
 
 from config.env import RAGConfig
 from llama_index.embeddings.openai import OpenAIEmbedding
@@ -27,7 +28,7 @@ class EmbeddingService:
             model_name=RAGConfig.rag_embedding_model,
             embed_batch_size=RAGConfig.rag_embedding_batch_size,
         )
-        logger.info(
+        logger.debug(
             'Embedding model initialized: '
             f'api_base={RAGConfig.rag_embedding_api_base}, '
             f'model={RAGConfig.rag_embedding_model}, '
@@ -38,55 +39,35 @@ class EmbeddingService:
         return self._embed_model
 
     async def get_text_embedding(self, text: str) -> list[float]:
+        request_start = perf_counter()
         try:
-            logger.info(
-                'Embedding request started: '
-                f'api_base={RAGConfig.rag_embedding_api_base}, '
-                f'model={RAGConfig.rag_embedding_model}, '
-                f'text_length={len(text or "")}'
-            )
             # Use the batch embedding API even for a single query so the
             # online query path matches the document indexing path exactly.
             embeddings = await self._embed_model.aget_text_embedding_batch([text])
             embedding = embeddings[0] if embeddings else []
-            logger.info(
-                'Embedding request finished: '
-                f'model={RAGConfig.rag_embedding_model}, '
-                f'vector_dim={len(embedding or [])}'
-            )
             return embedding
         except Exception as exc:
             logger.exception(
-                'Embedding request failed: '
+                'Embedding 调用失败: '
                 f'api_base={RAGConfig.rag_embedding_api_base}, '
                 f'model={RAGConfig.rag_embedding_model}, '
-                f'text_length={len(text or "")}, error={exc}'
+                f'text_length={len(text or "")}, '
+                f'elapsed_ms={int((perf_counter() - request_start) * 1000)}, error={exc}'
             )
             raise
 
     async def get_text_embeddings(self, texts: list[str]) -> list[list[float]]:
+        batch_start = perf_counter()
         try:
-            text_lengths = [len(text or '') for text in texts]
-            logger.info(
-                'Embedding batch request started: '
-                f'api_base={RAGConfig.rag_embedding_api_base}, '
-                f'model={RAGConfig.rag_embedding_model}, '
-                f'batch_count={len(texts)}, text_lengths={text_lengths}'
-            )
             embeddings = await self._embed_model.aget_text_embedding_batch(texts)
-            logger.info(
-                'Embedding batch request finished: '
-                f'model={RAGConfig.rag_embedding_model}, '
-                f'batch_count={len(embeddings or [])}, '
-                f'vector_dim={len((embeddings or [[]])[0]) if embeddings else 0}'
-            )
             return embeddings
         except Exception as exc:
             logger.exception(
-                'Embedding batch request failed: '
+                'Embedding 批量调用失败: '
                 f'api_base={RAGConfig.rag_embedding_api_base}, '
                 f'model={RAGConfig.rag_embedding_model}, '
-                f'batch_count={len(texts)}, error={exc}'
+                f'batch_count={len(texts)}, '
+                f'elapsed_ms={int((perf_counter() - batch_start) * 1000)}, error={exc}'
             )
             raise
 
