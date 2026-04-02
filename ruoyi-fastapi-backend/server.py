@@ -94,7 +94,7 @@ def create_app() -> FastAPI:
 
     # 挂载子应用
     handle_sub_applications(app)
-    # 加载中间件处理方法
+    # 加载中间件处理方法（暂不传 Redis，在 lifespan 中初始化后通过 app.state.redis 获取）
     handle_middleware(app)
     # 加载全局异常处理方法
     handle_exception(app)

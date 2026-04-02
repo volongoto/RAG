@@ -23,6 +23,7 @@ from module_orchestrator.entity.vo.orchestrator_vo import (
     ToolCallTraceModel,
     TraceEventModel,
 )
+from module_orchestrator.service.rag_gateway_interface import RagGatewayInterface
 from module_orchestrator.service.rag_runtime_gateway import RagRuntimeGateway
 from module_rag.entity.vo.rag_vo import QueryRequestModel
 from module_rag.entity.vo.runtime_vo import RetrieveRequestModel
@@ -34,6 +35,7 @@ TraceCallback = Callable[[TraceEventModel], Awaitable[None]]
 class OrchestratorService:
     """
     Agent orchestrator with Redis-backed state and in-memory fallback.
+    Uses dependency injection for RAG gateway to enable testing and flexibility.
     """
 
     RAG_RETRIEVE_TIMEOUT_SECONDS = 8
@@ -68,9 +70,14 @@ class OrchestratorService:
     _trace_store: dict[str, list[TraceEventModel]] = {}
     _lock = asyncio.Lock()
 
-    def __init__(self, redis_client: aioredis.Redis | None = None):
+    def __init__(
+        self,
+        redis_client: aioredis.Redis | None = None,
+        runtime_gateway: RagGatewayInterface | None = None,
+    ):
         self.redis_client = redis_client
-        self.runtime_gateway = RagRuntimeGateway()
+        # 支持依赖注入，便于测试和替换实现
+        self.runtime_gateway = runtime_gateway or RagRuntimeGateway()
 
     async def chat(
         self,

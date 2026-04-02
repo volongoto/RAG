@@ -8,22 +8,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.request_meta import RequestMeta
 from exceptions.exception import ServiceException
+from module_orchestrator.service.rag_gateway_interface import RagGatewayInterface
 from module_rag.entity.vo.rag_vo import QueryRequestModel, QueryResponseModel
 from module_rag.entity.vo.runtime_vo import RetrieveRequestModel, RetrieveResponseModel
 from module_rag.service.query_service import QueryService
 
 
-class RagRuntimeGateway:
+class RagRuntimeGateway(RagGatewayInterface):
     """
     Runtime access gateway.
+    Implements RagGatewayInterface for dependency injection.
 
     - If `RAG_RUNTIME_BASE_URL` is set, call runtime via HTTP/JSON.
     - Otherwise, fallback to in-process service calls.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, query_service: QueryService | None = None) -> None:
         self.runtime_base_url = (os.getenv('RAG_RUNTIME_BASE_URL') or '').strip().rstrip('/')
-        self.query_service = QueryService()
+        self.query_service = query_service or QueryService()
 
     async def retrieve(
         self,

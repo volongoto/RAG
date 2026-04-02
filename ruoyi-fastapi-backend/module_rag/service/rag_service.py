@@ -1351,40 +1351,86 @@ class DocumentService:
 
     @classmethod
     async def _queue_worker(cls, redis: Redis, worker_index: int) -> None:
+        """
+        文档解析队列工作线程
+
+        优化点：
+        - 增加 blpop 超时时间，减少 CPU 空转
+        - 添加指数退避重试机制
+        - 优化异常处理
+        """
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        base_timeout = 30  # 基础超时时间（秒）
+
         while True:
             current_doc_id: int | None = None
             current_task: asyncio.Task | None = None
             try:
-                queue_item = await redis.blpop(cls._queue_key, timeout=5)
+                # 使用更长的超时时间，减少 CPU 空转
+                # 当队列为空时，worker 会阻塞等待，而不是频繁轮询
+                queue_item = await redis.blpop(cls._queue_key, timeout=base_timeout)
+
                 if not queue_item:
+                    # 超时后继续循环，但重置错误计数
+                    consecutive_errors = 0
                     continue
 
                 _, token = queue_item
                 try:
                     current_doc_id = int(token)
                 except (TypeError, ValueError):
+                    logger.warning(f'Invalid token in queue: {token}')
                     await redis.srem(cls._queued_members_key, token)
                     continue
 
+                # 更新任务状态
                 await redis.srem(cls._queued_members_key, token)
                 await redis.sadd(cls._active_members_key, token)
                 await cls._refresh_queue_progress(redis)
 
-                current_task = asyncio.create_task(cls._parse_document_async(current_doc_id, redis))
+                # 执行解析任务
+                current_task = asyncio.create_task(
+                    cls._parse_document_async(current_doc_id, redis),
+                    name=f'parse_doc_{current_doc_id}'
+                )
                 cls._parse_tasks[current_doc_id] = current_task
                 await current_task
+
+                # 任务成功，重置错误计数
+                consecutive_errors = 0
+
             except asyncio.CancelledError:
+                logger.info(f'Worker {worker_index} received cancellation signal')
                 if current_task and not current_task.done():
                     current_task.cancel()
-                    await asyncio.gather(current_task, return_exceptions=True)
+                    try:
+                        await asyncio.wait_for(current_task, timeout=10)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        pass
                 raise
+
             except Exception as exc:
-                logger.exception(f'Document parse worker {worker_index} crashed on doc_id={current_doc_id}: {exc}')
+                consecutive_errors += 1
+                logger.exception(
+                    f'Document parse worker {worker_index} crashed '
+                    f'(consecutive_errors={consecutive_errors}): {exc}'
+                )
+
+                # 指数退避：连续错误时增加等待时间
+                if consecutive_errors >= max_consecutive_errors:
+                    backoff_seconds = min(2 ** (consecutive_errors - max_consecutive_errors), 60)
+                    logger.warning(f'Worker {worker_index} backing off for {backoff_seconds}s')
+                    await asyncio.sleep(backoff_seconds)
+
             finally:
                 if current_doc_id is not None:
                     cls._parse_tasks.pop(current_doc_id, None)
-                    await redis.srem(cls._active_members_key, cls._queue_token(current_doc_id))
-                    await cls._refresh_queue_progress(redis)
+                    try:
+                        await redis.srem(cls._active_members_key, cls._queue_token(current_doc_id))
+                        await cls._refresh_queue_progress(redis)
+                    except Exception as e:
+                        logger.error(f'Failed to cleanup task state: {e}')
 
     @classmethod
     async def _refresh_queue_progress(cls, redis: Redis | None) -> None:

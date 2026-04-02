@@ -5,7 +5,7 @@ import sys
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import computed_field
+from pydantic import computed_field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -28,12 +28,34 @@ class AppSettings(BaseSettings):
 class JwtSettings(BaseSettings):
     """
     Jwt配置
+    注意: 建议从环境变量读取 JWT_SECRET_KEY，避免使用默认值
     """
 
     jwt_secret_key: str = 'replace-with-a-strong-secret'
     jwt_algorithm: str = 'HS256'
     jwt_expire_minutes: int = 1440
     jwt_redis_expire_minutes: int = 30
+
+    @field_validator('jwt_secret_key', mode='before')
+    @classmethod
+    def validate_secret_key(cls, v: str) -> str:
+        """验证 JWT 密钥强度（仅在非默认值时强制验证）"""
+        # 允许默认值用于开发环境，但发出警告
+        weak_keys = {'replace-with-a-strong-secret', 'secret', 'admin', '123456'}
+        if v in weak_keys:
+            import warnings
+            warnings.warn(
+                'JWT_SECRET_KEY 使用了弱密钥或默认值，请在生产环境中设置强密钥！',
+                UserWarning,
+                stacklevel=2,
+            )
+        elif len(v) < 32 and v not in weak_keys:
+            warnings.warn(
+                f'JWT_SECRET_KEY 长度不足 (当前 {len(v)} 字符)，建议至少 32 字符',
+                UserWarning,
+                stacklevel=2,
+            )
+        return v
 
 
 class DataBaseSettings(BaseSettings):

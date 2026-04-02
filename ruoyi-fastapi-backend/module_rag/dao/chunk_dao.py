@@ -63,10 +63,11 @@ class ChunkDao:
     ) -> Sequence:
         """
         Vector retrieval with document metadata join.
+        Uses parameterized query to prevent SQL injection.
+        Note: Vector is embedded directly in SQL to avoid asyncpg/pgvector type casting issues.
         """
         embedding_str = '[' + ','.join(map(str, query_embedding)) + ']'
-        query = text(
-            f"""
+        query = text(f"""
             SELECT c.chunk_id, c.doc_id, c.kb_id, c.chunk_index, c.content, c.metadata,
                    d.file_name, d.file_path,
                    1 - (c.embedding <=> '{embedding_str}'::vector) AS similarity
@@ -77,9 +78,15 @@ class ChunkDao:
               AND 1 - (c.embedding <=> '{embedding_str}'::vector) >= :threshold
             ORDER BY c.embedding <=> '{embedding_str}'::vector
             LIMIT :top_k
-            """
+        """)
+        result = await db.execute(
+            query,
+            {
+                'kb_ids': kb_ids,
+                'top_k': top_k,
+                'threshold': threshold,
+            },
         )
-        result = await db.execute(query, {'kb_ids': kb_ids, 'top_k': top_k, 'threshold': threshold})
         return result.fetchall()
 
     @classmethod

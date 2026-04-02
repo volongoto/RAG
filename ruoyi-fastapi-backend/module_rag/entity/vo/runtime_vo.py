@@ -114,3 +114,27 @@ class InternalQueryRequestModel(BaseModel):
 
     principal: ExternalPrincipalModel = Field(description='External principal payload')
     query: QueryRequestModel = Field(description='RAG query payload')
+
+
+class InternalUploadDocumentRequestModel(BaseModel):
+    """内部文档上传请求模型（用于外部系统上传文档）"""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    principal: ExternalPrincipalModel = Field(description='External principal payload')
+    kb_id: int = Field(description='Target knowledge base ID')
+    file_name: str = Field(description='Document file name')
+    file_content_base64: str = Field(description='Base64 encoded file content')
+    file_type: Optional[str] = Field(default=None, description='File type/extension (auto-detected if not provided)')
+
+
+class InternalUploadDocumentResponseModel(BaseModel):
+    """内部文档上传响应模型"""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    doc_id: int = Field(description='Created document ID')
+    file_name: str = Field(description='Stored file name')
+    file_size: int = Field(description='File size in bytes')
+    parse_status: str = Field(default='0', description='Parse status: 0=pending, 1=parsing, 2=completed, 3=failed')
+    message: str = Field(description='Response message')

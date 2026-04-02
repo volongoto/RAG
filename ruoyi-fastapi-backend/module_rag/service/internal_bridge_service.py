@@ -233,6 +233,175 @@ class InternalRagBridgeService:
             .first()
         )
 
+    @classmethod
+    async def upload_document(
+        cls,
+        query_db: AsyncSession,
+        principal: ExternalPrincipalModel,
+        kb_id: int,
+        file_name: str,
+        file_content: bytes,
+        file_type: str | None = None,
+        redis=None,
+    ) -> dict[str, Any]:
+        """
+        上传文档到知识库（供外部系统调用）
+
+        Args:
+            query_db: 数据库会话
+            principal: 外部调用方身份
+            kb_id: 目标知识库 ID
+            file_name: 文件名
+            file_content: 文件内容（二进制）
+            file_type: 文件类型（可选，自动从文件名推断）
+            redis: Redis 客户端
+
+        Returns:
+            上传结果字典
+        """
+        from module_rag.service.document_storage_service import DocumentStorageService
+        from module_rag.service.rag_service import DocumentService
+
+        # 解析外部主体，获取映射的本地用户
+        resolved_principal = await cls.resolve_principal(query_db, principal)
+
+        # 检查知识库访问权限
+        visible_result = await cls.get_visible_knowledge_bases(query_db, principal)
+        allowed_kb_ids = set(visible_result.kb_ids)
+
+        if kb_id not in allowed_kb_ids:
+            raise ServiceException(message=f'没有权限访问知识库 {kb_id}')
+
+        # 检查文件类型
+        if file_type is None:
+            file_type = file_name.rsplit('.', 1)[-1].lower() if '.' in file_name else ''
+
+        allowed_extensions = {'pdf', 'doc', 'docx', 'txt', 'md', 'html'}
+        if file_type.lower() not in allowed_extensions:
+            raise ServiceException(
+                message=f'不支持的文件类型: {file_type}，支持的类型: {", ".join(allowed_extensions)}'
+            )
+
+        # 检查文件大小（最大 200MB）
+        max_size = 200 * 1024 * 1024  # 200MB
+        if len(file_content) > max_size:
+            raise ServiceException(message=f'文件大小超过限制 (最大 200MB)')
+
+        # 规范化文件名
+        normalized_file_name = DocumentStorageService.normalize_db_file_name(file_name)
+
+        # 存储文件
+        file_path = await DocumentStorageService.store_uploaded_file(kb_id, normalized_file_name, file_content)
+
+        # 创建文档记录
+        create_by = resolved_principal.mapped_user_name or principal.external_user_name or 'system'
+        upload_result = await DocumentService.upload_document_services(
+            query_db,
+            redis,
+            kb_id=kb_id,
+            file_name=normalized_file_name,
+            file_path=file_path,
+            file_size=len(file_content),
+            file_type=file_type.lower(),
+            create_by=create_by,
+        )
+
+        return {
+            'doc_id': upload_result.data.get('doc_id') if hasattr(upload_result, 'data') else 0,
+            'file_name': normalized_file_name,
+            'file_size': len(file_content),
+            'parse_status': '0',
+            'message': upload_result.message if hasattr(upload_result, 'message') else '文档上传成功',
+        }
+
+    @classmethod
+    async def get_document_list(
+        cls,
+        query_db: AsyncSession,
+        principal: ExternalPrincipalModel,
+        kb_id: int | None = None,
+        page_num: int = 1,
+        page_size: int = 10,
+        redis=None,
+    ) -> dict[str, Any]:
+        """
+        获取文档列表（供外部系统调用）
+
+        Args:
+            query_db: 数据库会话
+            principal: 外部调用方身份
+            kb_id: 知识库 ID（可选）
+            page_num: 页码
+            page_size: 每页数量
+            redis: Redis 客户端
+
+        Returns:
+            文档列表和分页信息
+        """
+        from module_rag.entity.vo.rag_vo import DocumentQueryModel
+        from module_rag.service.rag_service import DocumentService
+
+        # 检查权限
+        visible_result = await cls.get_visible_knowledge_bases(query_db, principal)
+        allowed_kb_ids = set(visible_result.kb_ids)
+
+        if kb_id is not None and kb_id not in allowed_kb_ids:
+            raise ServiceException(message=f'没有权限访问知识库 {kb_id}')
+
+        # 构建查询条件
+        query_model = DocumentQueryModel(
+            kb_id=kb_id,
+            page_num=page_num,
+            page_size=page_size,
+        )
+
+        # 查询文档列表
+        doc_list = await DocumentService.get_doc_list_services(query_db, query_model, redis=redis)
+
+        return {
+            'principal': visible_result.principal,
+            'kb_ids': list(allowed_kb_ids),
+            'documents': doc_list,
+            'page_num': page_num,
+            'page_size': page_size,
+        }
+
+    @classmethod
+    async def delete_document(
+        cls,
+        query_db: AsyncSession,
+        principal: ExternalPrincipalModel,
+        doc_id: int,
+        redis=None,
+    ) -> dict[str, Any]:
+        """
+        删除文档（供外部系统调用）
+
+        Args:
+            query_db: 数据库会话
+            principal: 外部调用方身份
+            doc_id: 文档 ID
+            redis: Redis 客户端
+
+        Returns:
+            删除结果
+        """
+        from module_rag.service.rag_service import DocumentService
+
+        # 检查权限（通过可见知识库间接验证）
+        visible_result = await cls.get_visible_knowledge_bases(query_db, principal)
+
+        # 执行删除
+        update_by = visible_result.principal.mapped_user_name or principal.external_user_name or 'system'
+        delete_result = await DocumentService.delete_document_services(
+            query_db, redis, str(doc_id), update_by
+        )
+
+        return {
+            'doc_id': doc_id,
+            'message': delete_result.message if hasattr(delete_result, 'message') else '文档删除成功',
+        }
+
     @staticmethod
     def _load_json_map(raw_value: str) -> dict[str, Any]:
         try:
