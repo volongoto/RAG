@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -7,6 +8,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.request_meta import RequestMeta
+from config.env import normalize_env_string
 from exceptions.exception import ServiceException
 from module_orchestrator.service.rag_gateway_interface import RagGatewayInterface
 from module_rag.entity.vo.rag_vo import QueryRequestModel, QueryResponseModel
@@ -24,7 +26,8 @@ class RagRuntimeGateway(RagGatewayInterface):
     """
 
     def __init__(self, query_service: QueryService | None = None) -> None:
-        self.runtime_base_url = (os.getenv('RAG_RUNTIME_BASE_URL') or '').strip().rstrip('/')
+        runtime_base_url = normalize_env_string(os.getenv('RAG_RUNTIME_BASE_URL') or '')
+        self.runtime_base_url = str(runtime_base_url or '').rstrip('/')
         self.query_service = query_service or QueryService()
 
     async def retrieve(
@@ -72,24 +75,47 @@ class RagRuntimeGateway(RagGatewayInterface):
     ) -> dict[str, Any]:
         url = f'{self.runtime_base_url}{path}'
         headers = {
-            'Authorization': meta.authorization,
-            'X-Tenant-Id': meta.tenant_id,
-            'X-User-Id': meta.user_id,
-            'X-Request-Id': meta.request_id,
-            'X-Trace-Id': meta.trace_id,
+            key: value
+            for key, value in {
+                'Authorization': meta.authorization,
+                'X-Tenant-Id': meta.tenant_id,
+                'X-User-Id': meta.user_id,
+                'X-Request-Id': meta.request_id,
+                'X-Trace-Id': meta.trace_id,
+            }.items()
+            if value
         }
+
         try:
             async with httpx.AsyncClient(timeout=timeout_seconds) as client:
                 response = await client.post(url, json=payload, headers=headers)
-        except Exception as e:
-            raise ServiceException(message=f'Runtime call failed: {e}')
+        except httpx.TimeoutException as exc:
+            raise ServiceException(message=f'Runtime call timed out: {exc}') from exc
+        except httpx.HTTPError as exc:
+            raise ServiceException(message=f'Runtime call failed: {exc}') from exc
+        except Exception as exc:
+            raise ServiceException(message=f'Runtime call failed: {exc}') from exc
 
+        response_preview = self._response_preview(response)
         if response.status_code >= 500:
-            raise ServiceException(message=f'Runtime service unavailable: HTTP {response.status_code}')
+            raise ServiceException(
+                message=f'Runtime service unavailable: HTTP {response.status_code}, body={response_preview}'
+            )
         if response.status_code >= 400:
-            raise ServiceException(message=f'Runtime request failed: HTTP {response.status_code}')
+            raise ServiceException(
+                message=f'Runtime request failed: HTTP {response.status_code}, body={response_preview}'
+            )
 
-        body = response.json()
+        try:
+            body = response.json()
+        except json.JSONDecodeError as exc:
+            raise ServiceException(
+                message=f'Runtime returned non-JSON response: HTTP {response.status_code}, body={response_preview}'
+            ) from exc
+
+        if not isinstance(body, dict):
+            raise ServiceException(message=f'Runtime returned unexpected JSON payload: {type(body).__name__}')
+
         success = body.get('success', True)
         if not success:
             raise ServiceException(message=body.get('msg') or 'Runtime returned failure')
@@ -97,4 +123,18 @@ class RagRuntimeGateway(RagGatewayInterface):
         data = body.get('data')
         if data is None:
             raise ServiceException(message='Runtime response missing data field')
+        if not isinstance(data, dict):
+            raise ServiceException(message=f'Runtime response data must be an object, got {type(data).__name__}')
         return data
+
+    @staticmethod
+    def _response_preview(response: httpx.Response, max_length: int = 300) -> str:
+        try:
+            text = (response.text or '').strip()
+        except Exception:
+            text = ''
+        if not text:
+            return '<empty>'
+        if len(text) <= max_length:
+            return text
+        return f'{text[: max_length - 3]}...'

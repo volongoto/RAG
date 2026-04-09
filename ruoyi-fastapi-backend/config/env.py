@@ -2,14 +2,32 @@ import argparse
 import configparser
 import os
 import sys
-from typing import Literal
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 from pydantic import computed_field, field_validator
 from pydantic_settings import BaseSettings
 
 
-class AppSettings(BaseSettings):
+def normalize_env_string(value: Any) -> Any:
+    """Strip whitespace and a single matching pair of wrapping quotes from env strings."""
+    if not isinstance(value, str):
+        return value
+
+    normalized = value.strip()
+    if len(normalized) >= 2 and normalized[0] == normalized[-1] and normalized[0] in {"'", '"'}:
+        normalized = normalized[1:-1].strip()
+    return normalized
+
+
+class NormalizedBaseSettings(BaseSettings):
+    @field_validator('*', mode='before')
+    @classmethod
+    def normalize_string_fields(cls, value: Any) -> Any:
+        return normalize_env_string(value)
+
+
+class AppSettings(NormalizedBaseSettings):
     """
     应用配置
     """
@@ -25,7 +43,7 @@ class AppSettings(BaseSettings):
     app_same_time_login: bool = True
 
 
-class JwtSettings(BaseSettings):
+class JwtSettings(NormalizedBaseSettings):
     """
     Jwt配置
     注意: 建议从环境变量读取 JWT_SECRET_KEY，避免使用默认值
@@ -58,7 +76,7 @@ class JwtSettings(BaseSettings):
         return v
 
 
-class DataBaseSettings(BaseSettings):
+class DataBaseSettings(NormalizedBaseSettings):
     """
     数据库配置
     """
@@ -83,7 +101,7 @@ class DataBaseSettings(BaseSettings):
         return self.db_type
 
 
-class RedisSettings(BaseSettings):
+class RedisSettings(NormalizedBaseSettings):
     """
     Redis配置
     """
@@ -141,7 +159,7 @@ class UploadSettings:
             os.makedirs(self.DOWNLOAD_PATH)
 
 
-class RAGSettings(BaseSettings):
+class RAGSettings(NormalizedBaseSettings):
     """
     RAG配置
     """
@@ -182,7 +200,7 @@ class RAGSettings(BaseSettings):
     rag_era_mismatch_right_markers: str = '韦小宝,鹿鼎记,康熙,清朝'
 
 
-class InternalRagBridgeSettings(BaseSettings):
+class InternalRagBridgeSettings(NormalizedBaseSettings):
     rag_internal_shared_secret: str = ''
     rag_internal_allowed_source_systems: str = 'ksguoaj-google'
     rag_external_user_map: str = '{}'

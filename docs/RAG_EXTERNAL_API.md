@@ -305,6 +305,236 @@ X-Service-Path: /internal/rag/kbs/visible
 
 ---
 
+### 3.3 文档上传
+
+向指定知识库上传文档，文档内容需使用 **Base64 编码**。
+
+**端点**: `POST /dev-api/internal/rag/documents/upload`
+
+#### 请求参数
+
+**Header**:
+```
+Content-Type: application/json
+X-Service-Source-System: {source_system}
+X-Service-Timestamp: {timestamp}
+X-Service-Signature: {signature}
+X-Service-Path: /internal/rag/documents/upload
+```
+
+**Body (JSON)**:
+
+```json
+{
+    "principal": {
+        "sourceSystem": "ksguoaj-google",
+        "externalUserId": "ext_user_001",
+        "externalUserName": "张三",
+        "externalDeptId": "dept_100"
+    },
+    "kbId": 1,
+    "fileName": "技术规范.pdf",
+    "fileContentBase64": "JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9UeXBlL1BhZ2UvUGFyZW50IDIgMCBS...",
+    "fileType": "pdf"
+}
+```
+
+**字段说明**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `principal` | Object | ✅ | 外部调用方身份（同 3.1） |
+| `kbId` | int | ✅ | 目标知识库 ID |
+| `fileName` | String | ✅ | 文件名（需包含扩展名） |
+| `fileContentBase64` | String | ✅ | 文件内容的 Base64 编码 |
+| `fileType` | String | ❌ | 文件类型（如 pdf, docx），默认从文件名推断 |
+
+**支持的文件类型**: `pdf`, `doc`, `docx`, `txt`, `md`, `html`
+
+**文件大小限制**: 单个文件最大 **200MB**
+
+#### 响应示例
+
+**成功响应 (200)**:
+
+```json
+{
+    "code": 200,
+    "msg": "操作成功",
+    "data": {
+        "docId": 123,
+        "fileName": "技术规范.pdf",
+        "fileSize": 1024567,
+        "parseStatus": "0",
+        "message": "文档上传成功"
+    }
+}
+```
+
+**字段说明**:
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `docId` | int | 创建的文档 ID |
+| `fileName` | String | 存储的文件名 |
+| `fileSize` | int | 文件大小（字节） |
+| `parseStatus` | String | 解析状态：`0`=待解析, `1`=解析中, `2`=完成, `3`=失败 |
+| `message` | String | 响应消息 |
+
+**失败响应 (403)** — 无权限访问知识库：
+
+```json
+{
+    "code": 500,
+    "msg": "没有权限访问知识库 1"
+}
+```
+
+**失败响应 (400)** — 不支持的文件类型：
+
+```json
+{
+    "code": 500,
+    "msg": "不支持的文件类型: xlsx，支持的类型: pdf, doc, docx, txt, md, html"
+}
+```
+
+---
+
+### 3.4 获取文档列表
+
+查询指定知识库中的文档列表。
+
+**端点**: `GET /dev-api/internal/rag/documents`
+
+#### 请求参数
+
+**Header**:
+```
+Content-Type: application/json
+X-Service-Source-System: {source_system}
+X-Service-Timestamp: {timestamp}
+X-Service-Signature: {signature}
+X-Service-Path: /internal/rag/documents
+```
+
+**Query 参数**:
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `kbId` | int | ❌ | 知识库 ID 过滤（不传则查所有可见 KB） |
+| `pageNum` | int | ❌ | 页码，默认 1 |
+| `pageSize` | int | ❌ | 每页数量，默认 10，最大 100 |
+
+**Body (JSON)**:
+
+```json
+{
+    "principal": {
+        "sourceSystem": "ksguoaj-google",
+        "externalUserName": "张三"
+    }
+}
+```
+
+#### 响应示例
+
+**成功响应 (200)**:
+
+```json
+{
+    "code": 200,
+    "msg": "操作成功",
+    "data": {
+        "principal": {
+            "sourceSystem": "ksguoaj-google",
+            "externalUserName": "张三",
+            "mappedUserId": 5,
+            "mappedUserName": "zhangsan",
+            "resolutionMode": "user_name_map"
+        },
+        "kbIds": [1, 3],
+        "documents": [
+            {
+                "docId": 123,
+                "kbId": 1,
+                "fileName": "技术规范.pdf",
+                "fileSize": 1024567,
+                "fileType": "pdf",
+                "chunkCount": 15,
+                "parseStatus": "2",
+                "parseProgress": 100,
+                "parseMessage": "解析完成",
+                "createTime": "2025-04-02T10:30:00"
+            },
+            {
+                "docId": 124,
+                "kbId": 1,
+                "fileName": "产品手册.docx",
+                "fileSize": 2048000,
+                "fileType": "docx",
+                "chunkCount": 0,
+                "parseStatus": "1",
+                "parseProgress": 45,
+                "parseMessage": "解析中",
+                "createTime": "2025-04-02T11:00:00"
+            }
+        ],
+        "pageNum": 1,
+        "pageSize": 10
+    }
+}
+```
+
+---
+
+### 3.5 删除文档
+
+删除指定文档。
+
+**端点**: `DELETE /dev-api/internal/rag/documents/{doc_id}`
+
+#### 请求参数
+
+**Header**:
+```
+Content-Type: application/json
+X-Service-Source-System: {source_system}
+X-Service-Timestamp: {timestamp}
+X-Service-Signature: {signature}
+X-Service-Path: /internal/rag/documents/{doc_id}
+```
+
+**Path 参数**:
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `doc_id` | int | ✅ | 文档 ID |
+
+**Body (JSON)**:
+
+```json
+{
+    "principal": {
+        "sourceSystem": "ksguoaj-google",
+        "externalUserName": "张三"
+    }
+}
+```
+
+#### 响应示例
+
+**成功响应 (200)**:
+
+```json
+{
+    "code": 200,
+    "msg": "文档删除成功"
+}
+```
+
+---
+
 ## 4. 数据模型
 
 ### 4.1 ExternalPrincipalModel（外部调用方身份）
@@ -416,6 +646,69 @@ interface KnowledgeBaseModel {
 }
 ```
 
+### 4.6 InternalUploadDocumentRequestModel（文档上传请求）
+
+```typescript
+interface InternalUploadDocumentRequestModel {
+    /** 外部调用方身份 */
+    principal: ExternalPrincipalModel;
+    /** 目标知识库ID */
+    kbId: number;
+    /** 文件名（需包含扩展名） */
+    fileName: string;
+    /** Base64编码的文件内容 */
+    fileContentBase64: string;
+    /** 文件类型（可选，默认从文件名推断） */
+    fileType?: string;
+}
+```
+
+### 4.7 InternalUploadDocumentResponseModel（文档上传响应）
+
+```typescript
+interface InternalUploadDocumentResponseModel {
+    /** 创建的文档ID */
+    docId: number;
+    /** 存储的文件名 */
+    fileName: string;
+    /** 文件大小（字节） */
+    fileSize: number;
+    /** 解析状态: 0=待解析, 1=解析中, 2=完成, 3=失败 */
+    parseStatus: string;
+    /** 响应消息 */
+    message: string;
+}
+```
+
+### 4.8 DocumentModel（文档模型）
+
+```typescript
+interface DocumentModel {
+    /** 文档ID */
+    docId?: number;
+    /** 知识库ID */
+    kbId?: number;
+    /** 文件名 */
+    fileName?: string;
+    /** 文件大小（字节） */
+    fileSize?: number;
+    /** 文件类型 */
+    fileType?: string;
+    /** 片段数量 */
+    chunkCount?: number;
+    /** 解析状态: 0=待解析, 1=解析中, 2=完成, 3=失败 */
+    parseStatus?: '0' | '1' | '2' | '3';
+    /** 解析错误信息 */
+    parseError?: string;
+    /** 解析进度（0-100） */
+    parseProgress?: number;
+    /** 解析进度消息 */
+    parseMessage?: string;
+    /** 创建时间 */
+    createTime?: string;
+}
+```
+
 ---
 
 ## 5. 错误码说明
@@ -431,6 +724,10 @@ interface KnowledgeBaseModel {
 | 401 | - | 共享密钥未配置 | 服务端配置 RAG_INTERNAL_SHARED_SECRET |
 | 500 | 500 | 无可访问知识库 | 检查用户/部门的权限和知识库分配 |
 | 500 | 500 | 映射配置不是合法JSON | 检查 .env 中的映射配置格式 |
+| 500 | 500 | 没有权限访问知识库 | 检查用户是否有该知识库的访问权限 |
+| 500 | 500 | 不支持的文件类型 | 检查文件类型是否在支持列表中 |
+| 500 | 500 | 文件大小超过限制 | 文件大小超过 200MB 限制 |
+| 500 | 500 | 文件内容 Base64 解码失败 | 检查 Base64 编码是否正确 |
 
 ---
 
@@ -647,6 +944,169 @@ class RagClient:
             timeout=self.timeout,
         )
         
+        return response.json()
+
+    def upload_document(
+        self,
+        file_path: str,
+        kb_id: int,
+        *,
+        external_user_id: str | None = None,
+        external_user_name: str | None = None,
+        external_dept_id: str | None = None,
+        file_name: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        上传文档到知识库
+
+        Args:
+            file_path: 本地文件路径
+            kb_id: 目标知识库ID
+            external_user_id: 外部用户ID
+            external_user_name: 外部用户名
+            external_dept_id: 外部部门ID
+            file_name: 自定义文件名（默认使用原文件名）
+
+        Returns:
+            API 响应字典
+        """
+        import base64
+        import os
+
+        path = '/internal/rag/documents/upload'
+
+        # 读取文件并编码为 Base64
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+
+        file_content_base64 = base64.b64encode(file_content).decode('utf-8')
+
+        # 确定文件名
+        actual_file_name = file_name or os.path.basename(file_path)
+
+        payload = {
+            'principal': {
+                'sourceSystem': self.source_system,
+                'externalUserId': external_user_id,
+                'externalUserName': external_user_name,
+                'externalDeptId': external_dept_id,
+            },
+            'kbId': kb_id,
+            'fileName': actual_file_name,
+            'fileContentBase64': file_content_base64,
+        }
+
+        headers = self._build_headers('POST', path, payload)
+        url = f'{self.base_url}{path}'
+
+        response = self.session.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=300,  # 上传文件可能需要更长时间
+        )
+
+        return response.json()
+
+    def get_document_list(
+        self,
+        *,
+        kb_id: int | None = None,
+        page_num: int = 1,
+        page_size: int = 10,
+        external_user_id: str | None = None,
+        external_user_name: str | None = None,
+        external_dept_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        获取文档列表
+
+        Args:
+            kb_id: 知识库ID过滤
+            page_num: 页码
+            page_size: 每页数量
+            external_user_id: 外部用户ID
+            external_user_name: 外部用户名
+            external_dept_id: 外部部门ID
+
+        Returns:
+            API 响应字典
+        """
+        path = '/internal/rag/documents'
+
+        # Query 参数
+        query_params = []
+        if kb_id is not None:
+            query_params.append(f'kbId={kb_id}')
+        query_params.append(f'pageNum={page_num}')
+        query_params.append(f'pageSize={page_size}')
+
+        query_string = '&'.join(query_params) if query_params else ''
+        full_path = f'{path}?{query_string}' if query_string else path
+
+        # Body 参数（用于签名）
+        payload = {
+            'principal': {
+                'sourceSystem': self.source_system,
+                'externalUserId': external_user_id,
+                'externalUserName': external_user_name,
+                'externalDeptId': external_dept_id,
+            },
+        }
+
+        headers = self._build_headers('GET', full_path, payload)
+        url = f'{self.base_url}{full_path}'
+
+        response = self.session.get(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=self.timeout,
+        )
+
+        return response.json()
+
+    def delete_document(
+        self,
+        doc_id: int,
+        *,
+        external_user_id: str | None = None,
+        external_user_name: str | None = None,
+        external_dept_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        删除文档
+
+        Args:
+            doc_id: 文档ID
+            external_user_id: 外部用户ID
+            external_user_name: 外部用户名
+            external_dept_id: 外部部门ID
+
+        Returns:
+            API 响应字典
+        """
+        path = f'/internal/rag/documents/{doc_id}'
+
+        payload = {
+            'principal': {
+                'sourceSystem': self.source_system,
+                'externalUserId': external_user_id,
+                'externalUserName': external_user_name,
+                'externalDeptId': external_dept_id,
+            },
+        }
+
+        headers = self._build_headers('DELETE', path, payload)
+        url = f'{self.base_url}{path}'
+
+        response = self.session.delete(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=self.timeout,
+        )
+
         return response.json()
 
 
