@@ -1,7 +1,7 @@
 # RAG + Agent Orchestrator 对外 API 接口说明
 
 版本: `v1`
-更新时间: `2026-03-27`
+更新时间: `2026-04-10`
 对齐实现: `cradle-main` 当前代码
 
 ## 1. 适用范围
@@ -23,7 +23,7 @@
 
 - 多轮问答、统一对话入口优先使用 `/orchestrator/*`
 - 纯检索、纯问答可直接使用 `/rag/*`
-- 系统到系统集成、外部系统用户映射场景使用 `/internal/rag/*`
+- 系统到系统集成、外部系统用户映射场景使用 `/internal/orchestrator/*` 或 `/internal/rag/*`
 
 ## 2. 服务地址与文档入口
 
@@ -64,7 +64,7 @@
 - 外部请求路径：`/docker-api/orchestrator/chat`
 - 后端实际收到的路径：`/orchestrator/chat`
 
-这一点对系统签名接口很重要：如果你调用 `/internal/rag/*`，签名头中的路径必须填写后端真实路径，不带网关前缀。
+这一点对系统签名接口很重要：如果你调用 `/internal/orchestrator/*` 或 `/internal/rag/*`，签名头中的路径必须填写后端真实路径，不带网关前缀。
 
 例如：
 
@@ -85,8 +85,9 @@
 
 1. 由服务端配置来源系统白名单与共享密钥
 2. 按文档生成 `X-Service-Signature`
-3. 先调用 `POST http://{host}:29099/internal/rag/kbs/visible` 获取可见知识库
-4. 再调用 `POST http://{host}:29099/internal/rag/query` 执行问答
+3. 多轮对话或统一 Agent 入口调用 `POST http://{host}:29099/internal/orchestrator/chat`
+4. 纯 RAG 问答调用 `POST http://{host}:29099/internal/rag/query`
+5. 需要预先探测权限范围时，可先调用 `POST http://{host}:29099/internal/rag/kbs/visible`
 
 说明：
 
@@ -142,7 +143,7 @@
 | `Content-Type` | 是 | `application/json` |
 | `X-Service-Source-System` | 是 | 来源系统编码，必须在服务端白名单中 |
 | `X-Service-Timestamp` | 是 | Unix 秒级时间戳 |
-| `X-Service-Path` | 是 | 后端真实请求路径，如 `/internal/rag/query` |
+| `X-Service-Path` | 是 | 后端真实请求路径，如 `/internal/orchestrator/chat`、`/internal/rag/query` |
 | `X-Service-Signature` | 是 | HMAC-SHA256 十六进制签名 |
 | `X-Service-Request-Id` | 否 | 调用方请求 ID，便于排障 |
 
@@ -167,7 +168,7 @@
 其中：
 
 - `METHOD` 为大写 HTTP 方法，如 `POST`
-- `PATH` 为后端真实路径，如 `/internal/rag/query`
+- `PATH` 为后端真实路径，如 `/internal/orchestrator/chat`、`/internal/rag/query`
 - `SOURCE_SYSTEM` 为 `X-Service-Source-System`
 - `TIMESTAMP` 为 `X-Service-Timestamp`
 - `CANONICAL_JSON_BODY` 为请求体 JSON 按 key 排序、无多余空格后的字符串
@@ -300,6 +301,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
 | 用户态 | GET | `/rag/query/logs` | JWT | 查询 RAG 历史日志 |
 | 用户态 | POST | `/rag/index/jobs` | JWT + 幂等 | 创建索引任务 |
 | 用户态 | GET | `/rag/index/jobs/{jobId}` | JWT | 查询索引任务状态 |
+| 系统态 | POST | `/internal/orchestrator/chat` | 服务签名 | 外部系统身份映射后的 Agent 对话，支持 SSE |
 | 系统态 | POST | `/internal/rag/kbs/visible` | 服务签名 | 获取映射主体可访问知识库 |
 | 系统态 | POST | `/internal/rag/query` | 服务签名 | 外部系统身份映射后的 RAG 问答 |
 
@@ -413,6 +415,7 @@ data: {"event":"done","data":{"sessionId":"s-001","requestId":"req-001","traceId
 
 - 如果下游 `rag.query` 超时或失败，Orchestrator 会返回降级答案，而不是直接中断
 - 降级答案通常基于已检索到的证据片段拼接生成
+- 如果需要外部系统以服务签名方式直接访问同一套编排能力，使用 `POST /internal/orchestrator/chat`
 
 ### 8.2 POST `/orchestrator/tasks`
 
@@ -845,6 +848,63 @@ data: {"event":"done","data":{"sessionId":"s-001","requestId":"req-001","traceId
 - 如果 `query.kbIds` 为空，当前实现会自动使用该主体可见的全部知识库
 - 如果映射后没有任何可访问知识库，接口会返回错误
 
+### 8.12 POST `/internal/orchestrator/chat`
+
+用途：
+
+- 基于外部系统用户/部门映射执行 Agent 对话
+- 对外暴露与用户态 `/orchestrator/chat` 等价的编排入口
+- `chat.stream=false` 返回完整 JSON
+- `chat.stream=true` 返回 `text/event-stream`
+
+调用地址：
+
+- 后端直连：`http://{host}:29099/internal/orchestrator/chat`
+- 容器内调用：`http://cradle-backend:29099/internal/orchestrator/chat`
+
+请求体：
+
+```json
+{
+  "principal": {
+    "sourceSystem": "your-source-system",
+    "externalUserId": "10001",
+    "externalUserName": "zhangsan",
+    "externalDeptId": "2001"
+  },
+  "chat": {
+    "sessionId": "s-001",
+    "scenario": "qa",
+    "locale": "zh-CN",
+    "message": "请总结合同审批流程",
+    "kbIds": [1, 2],
+    "stream": false,
+    "topK": 10,
+    "retrievalMode": "hybrid",
+    "includeSource": true
+  }
+}
+```
+
+字段说明：
+
+- `principal`：外部主体信息，映射规则与 `/internal/rag/query` 完全一致
+- `chat`：对话参数，字段定义与用户态 `/orchestrator/chat` 完全一致
+- `chat.kbIds`：会先按当前主体权限做过滤；若过滤后为空则返回无可访问知识库错误
+- `chat.stream`：`true` 时返回 SSE，事件类型与用户态 `/orchestrator/chat` 一致
+
+响应结构：
+
+- 非流式时返回结构与用户态 `/orchestrator/chat` 的 `data` 完全一致
+- 流式时返回原始 SSE 数据流，不再包裹统一 JSON 外层
+
+说明：
+
+- 不需要 JWT
+- 必须使用服务签名头
+- 对话中的检索与生成会复用内部主体映射后的知识库权限
+- 请求日志中的主体会优先落本地映射用户，映射不到时回退到外部身份标识
+
 ## 9. cURL 调用示例
 
 ### 9.1 登录获取 token
@@ -1004,15 +1064,44 @@ curl -X POST "http://{host}:29099/internal/rag/query" \
   }'
 ```
 
+### 9.9 系统态签名调用：执行 Agent 对话
+
+```bash
+curl -X POST "http://{host}:29099/internal/orchestrator/chat" \
+  -H "Content-Type: application/json" \
+  -H "X-Service-Source-System: your-source-system" \
+  -H "X-Service-Timestamp: <unix-seconds>" \
+  -H "X-Service-Path: /internal/orchestrator/chat" \
+  -H "X-Service-Signature: <hex-signature>" \
+  -H "X-Service-Request-Id: req-bridge-chat-001" \
+  -d '{
+    "principal": {
+      "sourceSystem": "your-source-system",
+      "externalUserId": "10001"
+    },
+    "chat": {
+      "sessionId": "s-001",
+      "scenario": "qa",
+      "locale": "zh-CN",
+      "message": "请总结合同审批流程",
+      "kbIds": [1, 2],
+      "stream": false,
+      "topK": 10,
+      "retrievalMode": "hybrid",
+      "includeSource": true
+    }
+  }'
+```
+
 ## 10. 对接建议与当前实现约束
 
-1. 前端或用户态业务接入优先走 `/orchestrator/chat`，避免业务侧自行编排“检索 + 生成 + 降级”流程。
+1. 前端或用户态业务接入优先走 `/orchestrator/chat`；外部系统签名接入优先走 `/internal/orchestrator/chat`，避免业务侧自行编排“检索 + 生成 + 降级”流程。
 2. 长任务和索引任务必须携带 `Idempotency-Key`，建议规则：`业务主键 + 任务类型 + 时间窗口`。
 3. 所有业务结果都必须按 `code/success/msg` 判定，不要只看 HTTP `200`。
 4. `/orchestrator/tasks` 当前要求 `payload.message` 和 `payload.kbIds` 必填。
 5. `/rag/index/jobs/{jobId}` 当前为进程内状态，服务重启后旧任务状态不可追踪。
 6. `/orchestrator/sessions/*` 与 `/orchestrator/tasks/*` 当前属于运行时状态视图，不是长期存档接口。
-7. 系统态签名接口的 `X-Service-Path` 必须填写后端真实路径，不能带 `/docker-api`、`/dev-api`、`/prod-api` 这类网关前缀。
+7. 系统态签名接口的 `X-Service-Path` 必须填写后端真实路径，不能带 `/docker-api`、`/dev-api`、`/prod-api` 这类网关前缀；例如 `/internal/orchestrator/chat`、`/internal/rag/query`。
 
 ## 11. 本次补充内容
 
@@ -1022,6 +1111,7 @@ curl -X POST "http://{host}:29099/internal/rag/query" \
 - Swagger / ReDoc / OpenAPI JSON 文档入口
 - 登录接口的真实调用方式和表单参数
 - JWT 用户态调用头、幂等头和权限点
+- 系统态 `/internal/orchestrator/chat` 编排对话接口说明与调用示例
 - 系统态 `/internal/rag/*` 签名接口说明
 - 服务签名算法与 Python 生成示例
 - Docker 代理转发下真实路径与网关前缀的区别

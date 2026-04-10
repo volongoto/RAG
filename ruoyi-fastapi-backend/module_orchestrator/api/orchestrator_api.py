@@ -1,4 +1,5 @@
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import Body, Header, Path, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,21 +7,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from common.annotation.log_annotation import Log
 from common.aspect.db_seesion import DBSessionDependency
 from common.aspect.interface_auth import UserInterfaceAuthDependency
+from common.aspect.internal_service_auth import InternalServiceAuthDependency
 from common.aspect.pre_auth import CurrentUserDependency, PreAuthDependency
 from common.enums import BusinessType
-from common.request_meta import build_request_meta
+from common.request_meta import RequestMeta, build_request_meta
 from common.router import APIRouterPro
 from common.vo import DataResponseModel
 from exceptions.exception import ServiceException
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_orchestrator.entity.vo.orchestrator_vo import (
+    InternalOrchestratorChatRequestModel,
     OrchestratorChatRequestModel,
     OrchestratorChatResponseModel,
     OrchestratorSessionViewModel,
     OrchestratorTaskCreateModel,
     OrchestratorTaskModel,
 )
+from module_orchestrator.service.internal_bridge_rag_gateway import InternalBridgeRagGateway
 from module_orchestrator.service.orchestrator_service import OrchestratorService
+from module_rag.entity.vo.runtime_vo import ResolvedPrincipalModel
+from module_rag.service.internal_bridge_service import InternalRagBridgeService
 from utils.idempotency_util import IdempotencyUtil
 from utils.log_util import logger
 from utils.response_util import ResponseUtil
@@ -28,6 +34,40 @@ from utils.response_util import ResponseUtil
 orchestrator_controller = APIRouterPro(
     prefix='/orchestrator', order_num=30, tags=['Agent-Orchestrator'], dependencies=[PreAuthDependency()]
 )
+internal_orchestrator_controller = APIRouterPro(
+    prefix='/internal/orchestrator',
+    order_num=31,
+    tags=['Agent-Orchestrator-Internal'],
+    dependencies=[InternalServiceAuthDependency()],
+    include_in_schema=False,
+)
+
+
+def _build_internal_request_meta(
+    request: Request,
+    payload: InternalOrchestratorChatRequestModel,
+    resolved_principal: ResolvedPrincipalModel,
+) -> RequestMeta:
+    auth_context = getattr(request.state, 'internal_service_auth', {}) or {}
+    request_id = str(auth_context.get('request_id') or '').strip() or uuid4().hex
+    tenant_id = request.headers.get('X-Tenant-Id', '').strip() or 'default'
+    if resolved_principal.mapped_user_id is not None:
+        user_id = str(resolved_principal.mapped_user_id)
+    else:
+        external_identity = (
+            (payload.principal.external_user_id or '').strip()
+            or (payload.principal.external_user_name or '').strip()
+            or (payload.principal.external_dept_id or '').strip()
+            or 'anonymous'
+        )
+        user_id = f'bridge:{payload.principal.source_system}:{external_identity}'
+    return RequestMeta(
+        authorization='',
+        tenant_id=tenant_id,
+        user_id=user_id,
+        request_id=request_id,
+        trace_id=request_id,
+    )
 
 
 @orchestrator_controller.post(
@@ -60,6 +100,44 @@ async def orchestrator_chat(
 
     result = await service.chat(query_db, current_user.user.user_id, meta, payload)
     logger.info('Orchestrator chat finished')
+    return ResponseUtil.success(data=result)
+
+
+@internal_orchestrator_controller.post(
+    '/chat',
+    summary='Execute bridged orchestrator chat',
+    description='Bridge external principal into orchestrator chat, supports SSE streaming',
+    response_model=DataResponseModel[OrchestratorChatResponseModel],
+)
+async def internal_orchestrator_chat(
+    request: Request,
+    payload: Annotated[InternalOrchestratorChatRequestModel, Body(description='Bridged chat payload')],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+) -> Response:
+    resolved_principal = await InternalRagBridgeService.resolve_principal(query_db, payload.principal)
+    meta = _build_internal_request_meta(request, payload, resolved_principal)
+    service = OrchestratorService(
+        getattr(request.app.state, 'redis', None),
+        runtime_gateway=InternalBridgeRagGateway(payload.principal),
+    )
+    mapped_user_id = resolved_principal.mapped_user_id or 0
+
+    if payload.chat.stream:
+        stream = service.stream_chat(query_db, mapped_user_id, meta, payload.chat)
+        return ResponseUtil.streaming(
+            data=stream,
+            media_type='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+            },
+        )
+
+    result = await service.chat(query_db, mapped_user_id, meta, payload.chat)
+    logger.info(
+        'Internal orchestrator chat finished '
+        f'source={payload.principal.source_system} mapped_user={resolved_principal.mapped_user_id}'
+    )
     return ResponseUtil.success(data=result)
 
 

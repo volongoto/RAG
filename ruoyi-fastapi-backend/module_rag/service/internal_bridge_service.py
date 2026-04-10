@@ -12,6 +12,8 @@ from module_rag.entity.do.rag_do import RagKnowledgeBase
 from module_rag.entity.vo.rag_vo import KnowledgeBaseModel, QueryRequestModel, QueryResponseModel
 from module_rag.entity.vo.runtime_vo import (
     ExternalPrincipalModel,
+    RetrieveRequestModel,
+    RetrieveResponseModel,
     InternalVisibleKnowledgeBasesResponseModel,
     ResolvedPrincipalModel,
 )
@@ -43,16 +45,7 @@ class InternalRagBridgeService:
         query_request: QueryRequestModel,
     ) -> QueryResponseModel:
         visible_result = await cls.get_visible_knowledge_bases(query_db, principal)
-        allowed_kb_ids = set(visible_result.kb_ids)
-        requested_kb_ids = query_request.kb_ids or visible_result.kb_ids
-        final_kb_ids = []
-        for kb_id in requested_kb_ids:
-            try:
-                normalized_kb_id = int(kb_id)
-            except (TypeError, ValueError):
-                continue
-            if normalized_kb_id in allowed_kb_ids and normalized_kb_id not in final_kb_ids:
-                final_kb_ids.append(normalized_kb_id)
+        final_kb_ids = cls._resolve_final_kb_ids(query_request.kb_ids, visible_result.kb_ids)
 
         if not final_kb_ids:
             raise ServiceException(message='当前主体在知识库系统中没有可访问的知识库')
@@ -74,6 +67,23 @@ class InternalRagBridgeService:
             visible_result.principal.mapped_user_id or 0,
             caller_meta=caller_meta,
         )
+
+    @classmethod
+    async def retrieve_knowledge_bases(
+        cls,
+        query_db: AsyncSession,
+        principal: ExternalPrincipalModel,
+        retrieve_request: RetrieveRequestModel,
+    ) -> RetrieveResponseModel:
+        visible_result = await cls.get_visible_knowledge_bases(query_db, principal)
+        final_kb_ids = cls._resolve_final_kb_ids(retrieve_request.kb_ids, visible_result.kb_ids)
+
+        if not final_kb_ids:
+            raise ServiceException(message='当前主体在知识库系统中没有可访问的知识库')
+
+        effective_request = retrieve_request.model_copy(update={'kb_ids': final_kb_ids})
+        query_service = QueryService()
+        return await query_service.retrieve_services(query_db, effective_request)
 
     @classmethod
     async def resolve_principal(
@@ -420,3 +430,17 @@ class InternalRagBridgeService:
             return int(raw_value)
         except (TypeError, ValueError):
             return None
+
+    @classmethod
+    def _resolve_final_kb_ids(cls, requested_kb_ids: list[int] | None, visible_kb_ids: list[int]) -> list[int]:
+        allowed_kb_ids = set(visible_kb_ids)
+        candidate_kb_ids = requested_kb_ids or visible_kb_ids
+        final_kb_ids: list[int] = []
+        for kb_id in candidate_kb_ids:
+            try:
+                normalized_kb_id = int(kb_id)
+            except (TypeError, ValueError):
+                continue
+            if normalized_kb_id in allowed_kb_ids and normalized_kb_id not in final_kb_ids:
+                final_kb_ids.append(normalized_kb_id)
+        return final_kb_ids

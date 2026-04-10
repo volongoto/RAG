@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from module_rag.entity.vo.rag_vo import SourceChunkModel
+from module_rag.entity.vo.runtime_vo import ExternalPrincipalModel
 
 
 class OrchestratorContextModel(BaseModel):
@@ -22,6 +23,13 @@ class OrchestratorChatRequestModel(OrchestratorContextModel):
     top_k: int = Field(default=10, ge=1, le=50, description='Top K retrieval')
     retrieval_mode: Literal['vector', 'lexical', 'hybrid'] = Field(default='hybrid', description='Retrieval mode')
     include_source: bool = Field(default=True, description='Include source chunks')
+
+
+class InternalOrchestratorChatRequestModel(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    principal: ExternalPrincipalModel = Field(description='External principal payload')
+    chat: OrchestratorChatRequestModel = Field(description='Orchestrator chat payload')
 
 
 class TraceEventModel(BaseModel):
