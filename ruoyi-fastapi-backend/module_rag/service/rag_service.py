@@ -346,6 +346,17 @@ class RAGEngine:
                 scenario=scenario,
                 answer_mode=normalized_answer_mode,
             )
+            lower_bound_answer = self._build_lower_bound_answer_from_chunks(
+                query_text=query_text,
+                source_chunks=source_chunks,
+                answer_mode=normalized_answer_mode,
+            )
+            if lower_bound_answer and self._answer_requires_lower_bound_fallback(answer):
+                logger.info(
+                    'RAG lower-bound fallback applied: '
+                    f'query_text={query_text!r}, source_chunk_count={len(source_chunks)}'
+                )
+                answer = lower_bound_answer
             total_ms = int((datetime.now() - start_time).total_seconds() * 1000)
             logger.info(
                 'RAG 查询完成: '
@@ -510,7 +521,7 @@ class RAGEngine:
             '回答规则：\n'
             '1. 必须使用简体中文。\n'
             '2. 只能输出一版最终答案，不要输出“另一种说法”或重复改写版本。\n'
-            '3. 核心结论必须能在参考资料中找到依据；若依据不足，明确写“根据当前知识库内容无法确定”。\n'
+            '3. 核心结论必须能在参考资料中找到依据；若无法得到精确数量但能从参考资料明确确认下界，允许回答“至少 N 起/个”，并说明无法据此确定精确总数；只有连下界都无法判断时，才写“根据当前知识库内容无法确定”。\n'
             '4. 禁止编造剧情、人物关系、因果链或具体事件细节。\n'
             '5. 禁止输出推理过程或元话术，如“好的我来分析”“首先其次”“让我思考”“现在你的任务是”。\n'
             '6. 内容精炼，避免重复，不要复述问题。\n'
@@ -936,6 +947,100 @@ class RAGEngine:
             if self._is_near_duplicate(first_key, candidate_key):
                 return ' '.join(sentences[:i]).strip()
         return text
+
+    @staticmethod
+    def _extract_year_case_count_intent(query_text: str) -> int | None:
+        query = (query_text or '').strip()
+        if not query:
+            return None
+
+        year_match = re.search(r'(?<!\d)(20\d{2})年', query)
+        if not year_match:
+            return None
+
+        count_markers = ('多少', '几起', '几宗', '案件数', '案件数量')
+        case_markers = ('案件', '案子', '案例', '事件')
+        if not any(marker in query for marker in count_markers):
+            return None
+        if not any(marker in query for marker in case_markers):
+            return None
+        return int(year_match.group(1))
+
+    @staticmethod
+    def _looks_like_case_snippet(text: str) -> bool:
+        normalized = re.sub(r'\s+', '', text or '')
+        if not normalized:
+            return False
+        case_markers = (
+            '案情',
+            '案件',
+            '案例',
+            '事件',
+            '侦办',
+            '查获',
+            '发现',
+            '巡查',
+            '抓获',
+            '审查',
+            '国安部门',
+        )
+        return any(marker in normalized for marker in case_markers)
+
+    def _collect_year_case_evidence(
+        self, year: int, source_chunks: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        year_token = f'{year}年'
+        year_matches: dict[str, dict[str, Any]] = {}
+        filtered_matches: dict[str, dict[str, Any]] = {}
+
+        for chunk in source_chunks or []:
+            snippet = str(chunk.get('snippet') or chunk.get('content') or '').strip()
+            if year_token not in snippet:
+                continue
+
+            doc_key = str(chunk.get('doc_id') or chunk.get('chunk_id') or snippet[:40])
+            existing = year_matches.get(doc_key)
+            if existing is None or len(snippet) > len(str(existing.get('snippet') or existing.get('content') or '')):
+                year_matches[doc_key] = chunk
+
+            if self._looks_like_case_snippet(snippet):
+                filtered_existing = filtered_matches.get(doc_key)
+                if filtered_existing is None or len(snippet) > len(
+                    str(filtered_existing.get('snippet') or filtered_existing.get('content') or '')
+                ):
+                    filtered_matches[doc_key] = chunk
+
+        matches = filtered_matches or year_matches
+        return list(matches.values())
+
+    def _build_lower_bound_answer_from_chunks(
+        self,
+        query_text: str,
+        source_chunks: list[dict[str, Any]],
+        answer_mode: str = 'detailed',
+    ) -> str | None:
+        year = self._extract_year_case_count_intent(query_text)
+        if year is None or not source_chunks:
+            return None
+
+        matches = self._collect_year_case_evidence(year, source_chunks)
+        if not matches:
+            return None
+
+        count = len(matches)
+        if self._normalize_answer_mode(answer_mode) == 'concise':
+            return f'根据当前已检索到的参考资料，至少有{count}起发生在{year}年的案件；现有证据不足以确定精确总数。'
+        return (
+            f'根据当前已检索到的参考资料，至少有{count}起发生在{year}年的案件。'
+            f'现有问答链路基于召回片段作答，因此可以确认下界，但还不足以据此确定知识库中的精确总数。'
+        )
+
+    @staticmethod
+    def _answer_requires_lower_bound_fallback(answer: str) -> bool:
+        normalized = re.sub(r'\s+', '', answer or '')
+        if not normalized:
+            return True
+        return '无法确定' in normalized and '至少' not in normalized
 
     @staticmethod
     def _normalize_for_dedup(text: str) -> str:
