@@ -5,7 +5,7 @@ import sys
 from typing import Any, Literal
 
 from dotenv import load_dotenv
-from pydantic import computed_field, field_validator
+from pydantic import ValidationInfo, computed_field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -170,6 +170,25 @@ class RAGSettings(NormalizedBaseSettings):
     rag_llm_temperature: float = 0.7
     rag_llm_max_tokens: int = 2000
     rag_llm_enable_thinking: str | None = None
+
+    @field_validator('rag_llm_api_base', 'rag_llm_api_key', 'rag_llm_model', mode='before')
+    @classmethod
+    def apply_legacy_llm_env_aliases(cls, value: Any, info: ValidationInfo) -> Any:
+        normalized = normalize_env_string(value)
+        if normalized not in (None, ''):
+            return normalized
+
+        legacy_env_name = {
+            'rag_llm_api_base': 'LLM_BASE_URL',
+            'rag_llm_api_key': 'LLM_API_KEY',
+            'rag_llm_model': 'LLM_MODEL',
+        }.get(info.field_name)
+        if not legacy_env_name:
+            return value
+
+        legacy_value = normalize_env_string(os.environ.get(legacy_env_name, ''))
+        return legacy_value if legacy_value not in (None, '') else value
+
     rag_embedding_api_base: str = 'https://api.siliconflow.cn/v1'
     rag_embedding_api_key: str = ''
     rag_embedding_model: str = 'BAAI/bge-m3'
