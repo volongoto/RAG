@@ -7,9 +7,9 @@ WORKDIR /app
 
 ARG BUILD_MODE=docker
 
-COPY package.json package-lock.json ./
+COPY package*.json ./
 RUN npm config set registry https://registry.npmmirror.com
-RUN npm ci
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 COPY . .
 RUN case "$BUILD_MODE" in \
