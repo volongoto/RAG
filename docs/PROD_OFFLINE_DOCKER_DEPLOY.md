@@ -163,8 +163,8 @@ docker run --privileged --rm tonistiigi/binfmt --install all
 ### 6.2 构建 ARM64 业务镜像
 
 ```bash
-docker buildx build --platform linux/arm64 -t cradle-frontend:prod-arm64 --build-arg BUILD_MODE=prod --load ./ruoyi-fastapi-frontend
-docker buildx build --platform linux/arm64 -t cradle-backend:prod-arm64 --load ./ruoyi-fastapi-backend
+docker buildx build --platform linux/arm64 -t ksga/cradle-frontend:20260423 --build-arg BUILD_MODE=prod --load ./ruoyi-fastapi-frontend
+docker buildx build --platform linux/arm64 -t ksga/cradle-backend:20260423 --load ./ruoyi-fastapi-backend
 ```
 
 ### 6.3 拉取 ARM64 基础镜像
@@ -375,3 +375,69 @@ docker build -t cradle-frontend:prod --build-arg BUILD_MODE=prod ./ruoyi-fastapi
 - 将冷数据迁移到归档库
 - 结合业务压测调整 `ivfflat.probes`
 
+## 15. 构建故障排查
+
+### 15.1 `dial tcp 127.0.0.1:10808` / `docker.3ms.run` 拉取失败
+
+如果构建日志里出现类似错误：
+
+```text
+connecting to 127.0.0.1:10808: connectex: No connection could be made
+```
+
+这不是前端或后端代码编译错误，而是 Docker 在拉取基础镜像时使用了一个失效的本地代理。
+常见原因：
+
+- Docker Desktop / Docker Engine 配置了 `HTTP_PROXY` / `HTTPS_PROXY=http://127.0.0.1:10808`
+- Docker 的 registry mirror 或 daemon proxy 指向了本机代理，但代理程序没有启动
+
+处理方式：
+
+1. 检查 Docker Desktop 的代理设置，移除或修正 `127.0.0.1:10808`
+2. 检查 Docker daemon / systemd 环境变量里的代理配置
+3. 如果必须走代理，先确认本机代理程序已经启动并监听 `127.0.0.1:10808`
+
+### 15.2 使用本地基础镜像或内网镜像仓库构建
+
+当前仓库的 Dockerfile 已支持覆写基础镜像：
+
+- 前端：
+  - `NODE_BASE_IMAGE`
+  - `NGINX_BASE_IMAGE`
+- 后端：
+  - `PYTHON_BASE_IMAGE`
+
+例如，若你已经在本机导入了基础镜像，或内网仓库里已有对应镜像，可这样构建：
+
+```bash
+docker build -t cradle-frontend:prod \
+  --build-arg BUILD_MODE=prod \
+  --build-arg NODE_BASE_IMAGE=registry.local/library/node:18-slim \
+  --build-arg NGINX_BASE_IMAGE=registry.local/library/nginx:latest \
+  ./ruoyi-fastapi-frontend
+
+docker build -t cradle-backend:prod \
+  --build-arg PYTHON_BASE_IMAGE=registry.local/library/python:3.12 \
+  ./ruoyi-fastapi-backend
+```
+
+如果使用根目录的 `docker-compose.yml` 本地构建，也可以先设置环境变量：
+
+```bash
+export FRONTEND_NODE_BASE_IMAGE=registry.local/library/node:18-slim
+export FRONTEND_NGINX_BASE_IMAGE=registry.local/library/nginx:latest
+export BACKEND_PYTHON_BASE_IMAGE=registry.local/library/python:3.12
+
+docker compose up -d --build
+```
+
+### 15.3 完全离线环境的建议
+
+如果目标机器完全不能访问外网，不要在目标机现拉基础镜像或现场构建业务镜像。推荐流程：
+
+1. 在可联网机器上拉取并构建所有镜像
+2. 用 `docker save` 导出完整镜像包
+3. 在目标机用 `docker load` 导入
+4. 直接使用 `docker-compose-prod.yml` 里的 `image:` 启动
+
+这样可以避免因为代理、镜像站、DNS 或 TLS 问题导致部署失败。

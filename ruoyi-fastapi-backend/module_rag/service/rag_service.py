@@ -16,11 +16,11 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpe
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from common.vo import CrudResponseModel
+from common.vo import CrudResponseModel, PageModel
 from exceptions.exception import ServiceException
 from module_rag.dao.chunk_dao import ChunkDao
 from module_rag.dao.document_dao import DocumentDao
-from module_rag.entity.vo.rag_vo import DocumentModel
+from module_rag.entity.vo.rag_vo import DocumentModel, DocumentQueryModel
 from module_rag.service.chunk_splitter import ChunkSplitter
 from module_rag.service.document_storage_service import DocumentStorageService
 from module_rag.service.embedding_service import EmbeddingService
@@ -1153,15 +1153,21 @@ class LegacyDocumentService:
     async def get_doc_list_services(
         cls,
         query_db: AsyncSession,
-        page_object: DocumentModel,
+        page_object: DocumentQueryModel,
         data_scope_sql=None,
         redis: Redis | None = None,
-    ) -> list[dict[str, Any]]:
-        doc_list_result = await DocumentDao.get_doc_list(query_db, page_object, data_scope_sql)
-        from utils.common_util import CamelCaseUtil
-
-        doc_list = CamelCaseUtil.transform_result(doc_list_result)
-        return await cls._decorate_docs_with_progress(redis, doc_list)
+        is_page: bool = True,
+    ) -> PageModel | list[dict[str, Any]]:
+        doc_list_result = await DocumentDao.get_doc_list(
+            query_db,
+            page_object,
+            data_scope_sql,
+            is_page=is_page,
+        )
+        if is_page:
+            doc_list_result.rows = await cls._decorate_docs_with_progress(redis, doc_list_result.rows)
+            return doc_list_result
+        return await cls._decorate_docs_with_progress(redis, doc_list_result)
 
     @classmethod
     async def get_doc_detail_services(
@@ -1607,15 +1613,21 @@ class DocumentService:
     async def get_doc_list_services(
         cls,
         query_db: AsyncSession,
-        page_object: DocumentModel,
+        page_object: DocumentQueryModel,
         data_scope_sql=None,
         redis: Redis | None = None,
-    ) -> list[dict[str, Any]]:
-        doc_list_result = await DocumentDao.get_doc_list(query_db, page_object, data_scope_sql)
-        from utils.common_util import CamelCaseUtil
-
-        doc_list = CamelCaseUtil.transform_result(doc_list_result)
-        return await cls._decorate_docs_with_progress(redis, doc_list)
+        is_page: bool = True,
+    ) -> PageModel | list[dict[str, Any]]:
+        doc_list_result = await DocumentDao.get_doc_list(
+            query_db,
+            page_object,
+            data_scope_sql,
+            is_page=is_page,
+        )
+        if is_page:
+            doc_list_result.rows = await cls._decorate_docs_with_progress(redis, doc_list_result.rows)
+            return doc_list_result
+        return await cls._decorate_docs_with_progress(redis, doc_list_result)
 
     @classmethod
     async def get_doc_detail_services(

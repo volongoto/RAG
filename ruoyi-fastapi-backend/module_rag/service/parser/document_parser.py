@@ -1,6 +1,4 @@
-import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -36,7 +34,7 @@ class PDFParser(BaseParser):
             doc.close()
         except Exception as exc:
             logger.error(f'PDF parse failed: {file_path}, error: {exc}')
-            raise exc
+            raise
         return paragraphs
 
     def _split_into_paragraphs(self, text: str, page_num: int) -> list[dict[str, Any]]:
@@ -89,19 +87,15 @@ class DocxParser(BaseParser):
                 converted_file_path = self._convert_doc_to_docx(file_path)
                 converted_output_dir = os.path.dirname(converted_file_path)
                 file_path = converted_file_path
-                detected_format = 'docx'
-            if detected_format in ('docm', 'dotm'):
-                raise ServiceException(
-                    message='当前不支持带宏的 Word 文档，请另存为标准 DOCX 后再上传'
-                )
-            if detected_format == 'unknown':
-                raise ServiceException(
-                    message='无法识别当前 Word 文档格式，请确认文件未损坏并重新保存为标准 DOCX'
-                )
+            elif detected_format in ('docm', 'dotm'):
+                raise ServiceException(message='Macro-enabled Word documents are not supported. Please save as DOCX.')
+            elif detected_format == 'unknown':
+                converted_file_path = self._convert_office_file_to_docx(file_path)
+                converted_output_dir = os.path.dirname(converted_file_path)
+                file_path = converted_file_path
 
             doc = Document(file_path)
             para_index = 0
-
             for para in doc.paragraphs:
                 text = para.text.strip()
                 if not text:
@@ -117,7 +111,7 @@ class DocxParser(BaseParser):
                 para_index += 1
         except Exception as exc:
             logger.error(f'Word parse failed: {file_path}, error: {exc}')
-            raise exc
+            raise
         finally:
             if converted_file_path and os.path.exists(converted_file_path):
                 try:
@@ -132,12 +126,16 @@ class DocxParser(BaseParser):
         return paragraphs
 
     def _convert_doc_to_docx(self, file_path: str) -> str:
+        return self._convert_office_file_to_docx(file_path, source_label='DOC')
+
+    def _convert_office_file_to_docx(self, file_path: str, source_label: str | None = None) -> str:
         office_binary = shutil.which('soffice') or shutil.which('libreoffice')
         if not office_binary:
             raise ServiceException(
-                message='DOC 文档解析依赖 LibreOffice。当前环境未安装 soffice/libreoffice，无法自动转换 DOC。'
+                message='Word parsing requires LibreOffice for legacy or non-standard office files.'
             )
 
+        readable_source_label = (source_label or Path(file_path).suffix.lstrip('.').upper() or 'OFFICE').strip()
         output_dir = tempfile.mkdtemp(prefix='rag_doc_convert_')
         command = [
             office_binary,
@@ -148,23 +146,33 @@ class DocxParser(BaseParser):
             output_dir,
             file_path,
         ]
-        logger.info(f'Converting DOC to DOCX with LibreOffice: command={" ".join(command)}')
+        logger.info(
+            f'Converting {readable_source_label} to DOCX with LibreOffice: command={" ".join(command)}'
+        )
         try:
             result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=120)
         except subprocess.TimeoutExpired as exc:
-            raise ServiceException(message='DOC 转换超时，请稍后重试或手动转换为 DOCX') from exc
+            raise ServiceException(
+                message=f'{readable_source_label} conversion timed out. Please try again or resave the file as DOCX.'
+            ) from exc
 
         if result.returncode != 0:
             logger.error(
-                'DOC to DOCX conversion failed: '
+                f'{readable_source_label} to DOCX conversion failed: '
                 f'returncode={result.returncode}, stdout={result.stdout}, stderr={result.stderr}'
             )
-            raise ServiceException(message='DOC 转换失败，请检查文件是否损坏，或手动转换为 DOCX 后重试')
+            raise ServiceException(
+                message=f'{readable_source_label} conversion failed. Please check the file or resave it as DOCX.'
+            )
 
         converted_path = os.path.join(output_dir, f'{Path(file_path).stem}.docx')
         if not os.path.exists(converted_path):
-            raise ServiceException(message='DOC 转换完成但未生成 DOCX 文件，请手动转换后重试')
-        logger.info(f'DOC converted to DOCX successfully: source={file_path}, target={converted_path}')
+            raise ServiceException(
+                message=f'{readable_source_label} conversion finished but no DOCX file was generated.'
+            )
+        logger.info(
+            f'{readable_source_label} converted to DOCX successfully: source={file_path}, target={converted_path}'
+        )
         return converted_path
 
     def _detect_word_file_format(self, file_path: str) -> str:
@@ -201,6 +209,7 @@ class DocumentParserFactory:
         'pdf': PDFParser,
         'doc': DocxParser,
         'docx': DocxParser,
+        'wps': DocxParser,
     }
 
     @classmethod

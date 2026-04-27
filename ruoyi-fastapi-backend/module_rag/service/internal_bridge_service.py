@@ -366,14 +366,21 @@ class InternalRagBridgeService:
         )
 
         # 查询文档列表
-        doc_list = await DocumentService.get_doc_list_services(query_db, query_model, redis=redis)
+        doc_page = await DocumentService.get_doc_list_services(
+            query_db,
+            query_model,
+            redis=redis,
+            is_page=True,
+        )
 
         return {
             'principal': visible_result.principal,
             'kb_ids': list(allowed_kb_ids),
-            'documents': doc_list,
-            'page_num': page_num,
-            'page_size': page_size,
+            'documents': doc_page.rows,
+            'page_num': doc_page.page_num,
+            'page_size': doc_page.page_size,
+            'total': doc_page.total,
+            'has_next': doc_page.has_next,
         }
 
     @classmethod

@@ -1,23 +1,22 @@
 from collections.abc import Sequence
-from typing import Union
+from typing import Any, Union
 
 from sqlalchemy import ColumnElement, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from common.vo import PageModel
 from module_rag.entity.do.rag_do import RagDocument
-from module_rag.entity.vo.rag_vo import DocumentModel
+from module_rag.entity.vo.rag_vo import DocumentModel, DocumentQueryModel
+from utils.page_util import PageUtil
 
 
 class DocumentDao:
     """
-    文档管理模块数据库操作层
+    Document persistence layer.
     """
 
     @classmethod
     async def get_doc_by_id(cls, db: AsyncSession, doc_id: int) -> Union[RagDocument, None]:
-        """
-        根据文档ID获取文档信息
-        """
         doc_info = (
             (await db.execute(select(RagDocument).where(RagDocument.doc_id == doc_id, RagDocument.del_flag == '0')))
             .scalars()
@@ -27,11 +26,12 @@ class DocumentDao:
 
     @classmethod
     async def get_doc_list(
-        cls, db: AsyncSession, query_object: DocumentModel, data_scope_sql: ColumnElement = None
-    ) -> Sequence[RagDocument]:
-        """
-        根据查询参数获取文档列表
-        """
+        cls,
+        db: AsyncSession,
+        query_object: DocumentQueryModel,
+        data_scope_sql: ColumnElement | None = None,
+        is_page: bool = False,
+    ) -> Union[PageModel, list[dict[str, Any]]]:
         conditions = [
             RagDocument.del_flag == '0',
             RagDocument.doc_id == query_object.doc_id if query_object.doc_id else True,
@@ -42,21 +42,12 @@ class DocumentDao:
         ]
         if data_scope_sql is not None:
             conditions.append(data_scope_sql)
-        
-        query = (
-            select(RagDocument)
-            .where(*conditions)
-            .order_by(RagDocument.create_time.desc())
-            .distinct()
-        )
-        doc_list = (await db.execute(query)).scalars().all()
-        return doc_list
+
+        query = select(RagDocument).where(*conditions).order_by(RagDocument.create_time.desc()).distinct()
+        return await PageUtil.paginate(db, query, query_object.page_num, query_object.page_size, is_page)
 
     @classmethod
     async def get_docs_by_parse_statuses(cls, db: AsyncSession, statuses: list[str]) -> Sequence[RagDocument]:
-        """
-        Get documents by parse status for task recovery.
-        """
         query = (
             select(RagDocument)
             .where(RagDocument.del_flag == '0', RagDocument.parse_status.in_(statuses))
@@ -66,9 +57,6 @@ class DocumentDao:
 
     @classmethod
     async def add_doc_dao(cls, db: AsyncSession, doc: DocumentModel) -> RagDocument:
-        """
-        新增文档
-        """
         db_doc = RagDocument(**doc.model_dump(exclude_unset=True))
         db.add(db_doc)
         await db.flush()
@@ -76,9 +64,6 @@ class DocumentDao:
 
     @classmethod
     async def edit_doc_dao(cls, db: AsyncSession, doc: dict) -> None:
-        """
-        编辑文档
-        """
         await db.execute(update(RagDocument).where(RagDocument.doc_id == doc['doc_id']), [doc])
 
     @classmethod
@@ -91,9 +76,6 @@ class DocumentDao:
         chunk_count: int = None,
         clear_error: bool = False,
     ) -> None:
-        """
-        更新文档解析状态
-        """
         values = {'parse_status': status, 'update_time': func.now()}
         if error_msg is not None:
             values['parse_error'] = error_msg
@@ -101,15 +83,10 @@ class DocumentDao:
             values['parse_error'] = None
         if chunk_count is not None:
             values['chunk_count'] = chunk_count
-        await db.execute(
-            update(RagDocument).where(RagDocument.doc_id == doc_id).values(values)
-        )
+        await db.execute(update(RagDocument).where(RagDocument.doc_id == doc_id).values(values))
 
     @classmethod
     async def delete_doc_dao(cls, db: AsyncSession, doc: DocumentModel) -> None:
-        """
-        删除文档
-        """
         await db.execute(
             update(RagDocument)
             .where(RagDocument.doc_id == doc.doc_id)
@@ -118,9 +95,6 @@ class DocumentDao:
 
     @classmethod
     async def count_doc_chunks_dao(cls, db: AsyncSession, doc_id: int) -> int:
-        """
-        统计文档下的切片数量
-        """
         from module_rag.entity.do.rag_do import RagChunk
 
         count = (

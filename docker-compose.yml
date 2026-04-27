@@ -4,6 +4,9 @@ services:
     build:
       context: ./ruoyi-fastapi-frontend
       dockerfile: Dockerfile
+      args:
+        NODE_BASE_IMAGE: ${FRONTEND_NODE_BASE_IMAGE:-node:18-slim}
+        NGINX_BASE_IMAGE: ${FRONTEND_NGINX_BASE_IMAGE:-nginx:latest}
     image: cradle-frontend:latest
     container_name: cradle-frontend
     ports:
@@ -20,6 +23,8 @@ services:
     build:
       context: ./ruoyi-fastapi-backend
       dockerfile: Dockerfile
+      args:
+        PYTHON_BASE_IMAGE: ${BACKEND_PYTHON_BASE_IMAGE:-python:3.12}
     image: cradle-backend:latest
     container_name: cradle-backend
     env_file:

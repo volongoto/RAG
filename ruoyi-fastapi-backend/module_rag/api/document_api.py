@@ -11,7 +11,7 @@ from common.aspect.interface_auth import UserInterfaceAuthDependency
 from common.aspect.pre_auth import CurrentUserDependency, PreAuthDependency
 from common.enums import BusinessType
 from common.router import APIRouterPro
-from common.vo import DataResponseModel, ResponseBaseModel
+from common.vo import DataResponseModel, PageResponseModel, ResponseBaseModel
 from config.env import RAGConfig
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_rag.entity.do.rag_do import RagKnowledgeBase
@@ -23,11 +23,16 @@ from module_rag.entity.vo.rag_vo import (
 )
 from module_rag.service.document_storage_service import DocumentStorageService
 from module_rag.service.knowledge_base_service import KnowledgeBaseDataScope, KnowledgeBaseService
+from module_rag.service.parser.document_type_detector import (
+    SUPPORTED_DOCUMENT_EXTENSIONS,
+    detect_document_type,
+    get_file_extension,
+)
 from module_rag.service.rag_service import DocumentService
 from utils.log_util import logger
 from utils.response_util import ResponseUtil
 
-ALLOWED_DOCUMENT_EXTENSIONS = ['pdf', 'doc', 'docx']
+ALLOWED_DOCUMENT_EXTENSIONS = list(SUPPORTED_DOCUMENT_EXTENSIONS)
 BYTES_PER_MB = 1024 * 1024
 
 document_controller = APIRouterPro(
@@ -39,7 +44,7 @@ document_controller = APIRouterPro(
     '/list',
     summary='Get document list',
     description='List documents in a knowledge base',
-    response_model=DataResponseModel[list[DocumentModel]],
+    response_model=PageResponseModel[DocumentModel],
     dependencies=[UserInterfaceAuthDependency('rag:doc:list')],
 )
 async def get_document_list(
@@ -48,10 +53,13 @@ async def get_document_list(
     query_db: Annotated[AsyncSession, DBSessionDependency()],
 ) -> Response:
     doc_query_result = await DocumentService.get_doc_list_services(
-        query_db, doc_query, redis=request.app.state.redis
+        query_db,
+        doc_query,
+        redis=request.app.state.redis,
+        is_page=True,
     )
     logger.info('Document list fetched')
-    return ResponseUtil.success(data=doc_query_result)
+    return ResponseUtil.success(model_content=doc_query_result)
 
 
 def _normalize_non_negative_int(value: int | None, default: int = 0) -> int:
@@ -98,7 +106,9 @@ async def query_detail_document(
     query_db: Annotated[AsyncSession, DBSessionDependency()],
 ) -> Response:
     detail_doc_result = await DocumentService.get_doc_detail_services(
-        query_db, doc_id, redis=request.app.state.redis
+        query_db,
+        doc_id,
+        redis=request.app.state.redis,
     )
     logger.info(f'Document detail fetched: doc_id={doc_id}')
     return ResponseUtil.success(data=detail_doc_result)
@@ -147,31 +157,41 @@ async def upload_document(
         await KnowledgeBaseService.check_kb_data_scope_services(query_db, kb_id, data_scope_sql)
 
     if not file.filename:
-        return ResponseUtil.failure(msg='文件名不能为空')
-
-    file_ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
-    if file_ext not in ALLOWED_DOCUMENT_EXTENSIONS:
-        logger.warning(
-            'Document upload rejected due to unsupported extension: '
-            f'kb_id={kb_id}, filename={file.filename}, extension={file_ext}, content_type={file.content_type}'
-        )
-        return ResponseUtil.failure(msg='仅支持 PDF、DOC 和 DOCX 文档')
-
-    normalized_file_name = DocumentStorageService.normalize_db_file_name(file.filename)
-    if normalized_file_name != file.filename:
-        logger.warning(
-            'Document file name truncated to fit storage constraints: '
-            f'original_filename={file.filename}, normalized_filename={normalized_file_name}'
-        )
+        return ResponseUtil.failure(msg='File name is required.')
 
     upload_policy = _build_upload_policy()
     file_content = await file.read()
     file_size = len(file_content)
+    original_extension = get_file_extension(file.filename)
+    detected_type = detect_document_type(
+        file_name=file.filename,
+        file_content=file_content,
+        content_type=file.content_type,
+    )
     logger.info(
         'Document upload payload loaded: '
-        f'kb_id={kb_id}, filename={file.filename}, extension={file_ext}, '
+        f'kb_id={kb_id}, filename={file.filename}, extension={original_extension}, '
+        f'detected_type={detected_type.file_type}, detection_source={detected_type.detection_source}, '
         f'content_type={file.content_type}, size_bytes={file_size}'
     )
+
+    if original_extension and original_extension not in ALLOWED_DOCUMENT_EXTENSIONS and detected_type.file_type is None:
+        logger.warning(
+            'Document upload rejected due to unsupported file type: '
+            f'kb_id={kb_id}, filename={file.filename}, extension={original_extension}, '
+            f'content_type={file.content_type}'
+        )
+        return ResponseUtil.failure(msg='Only PDF, DOC, DOCX, and WPS documents are supported.')
+
+    if detected_type.file_type is None:
+        logger.warning(
+            'Document upload rejected because the real file type could not be recognized: '
+            f'kb_id={kb_id}, filename={file.filename}, extension={original_extension}, '
+            f'content_type={file.content_type}'
+        )
+        return ResponseUtil.failure(
+            msg='The file type could not be recognized. Please upload a valid PDF, DOC, DOCX, or WPS document.'
+        )
 
     if upload_policy.max_single_file_size_bytes > 0 and file_size > upload_policy.max_single_file_size_bytes:
         max_size_mb = upload_policy.max_single_file_size_bytes // BYTES_PER_MB
@@ -180,13 +200,20 @@ async def upload_document(
             f'kb_id={kb_id}, filename={file.filename}, size_bytes={file_size}, '
             f'max_size_bytes={upload_policy.max_single_file_size_bytes}'
         )
-        return ResponseUtil.failure(msg=f'单个文件大小不能超过 {max_size_mb} MB')
+        return ResponseUtil.failure(msg=f'Single file size must not exceed {max_size_mb} MB.')
+
+    normalized_file_name = DocumentStorageService.normalize_db_file_name(file.filename)
+    if normalized_file_name != file.filename:
+        logger.warning(
+            'Document file name truncated to fit storage constraints: '
+            f'original_filename={file.filename}, normalized_filename={normalized_file_name}'
+        )
 
     file_path = await DocumentStorageService.store_uploaded_file(kb_id, normalized_file_name, file_content)
     logger.info(
         'Document stored successfully: '
         f'kb_id={kb_id}, filename={normalized_file_name}, stored_path={file_path}, '
-        f'storage_mode={DocumentStorageService.storage_mode()}'
+        f'storage_mode={DocumentStorageService.storage_mode()}, detected_type={detected_type.file_type}'
     )
 
     upload_result = await DocumentService.upload_document_services(
@@ -196,7 +223,7 @@ async def upload_document(
         file_name=normalized_file_name,
         file_path=file_path,
         file_size=file_size,
-        file_type=file_ext,
+        file_type=detected_type.file_type,
         create_by=current_user.user.user_name,
     )
     logger.info(upload_result.message)
@@ -218,10 +245,15 @@ async def delete_document(
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
 ) -> Response:
     delete_doc = DeleteDocumentModel(
-        docIds=doc_ids, updateBy=current_user.user.user_name, updateTime=datetime.now()
+        docIds=doc_ids,
+        updateBy=current_user.user.user_name,
+        updateTime=datetime.now(),
     )
     delete_doc_result = await DocumentService.delete_document_services(
-        query_db, request.app.state.redis, delete_doc.doc_ids, delete_doc.update_by
+        query_db,
+        request.app.state.redis,
+        delete_doc.doc_ids,
+        delete_doc.update_by,
     )
     logger.info(delete_doc_result.message)
     return ResponseUtil.success(msg=delete_doc_result.message)
@@ -241,7 +273,9 @@ async def reparse_document(
     query_db: Annotated[AsyncSession, DBSessionDependency()],
 ) -> Response:
     reparse_result = await DocumentService.reparse_document_services(
-        query_db, request.app.state.redis, doc_id
+        query_db,
+        request.app.state.redis,
+        doc_id,
     )
     logger.info(reparse_result.message)
     return ResponseUtil.success(msg=reparse_result.message)

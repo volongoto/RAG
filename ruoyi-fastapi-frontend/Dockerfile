@@ -1,4 +1,7 @@
-FROM node:18-slim AS builder
+ARG NODE_BASE_IMAGE=node:18-slim
+ARG NGINX_BASE_IMAGE=nginx:latest
+
+FROM ${NODE_BASE_IMAGE} AS builder
 
 WORKDIR /app
 
@@ -16,7 +19,7 @@ RUN case "$BUILD_MODE" in \
     *) echo "Unsupported BUILD_MODE: $BUILD_MODE" >&2; exit 1 ;; \
     esac
 
-FROM nginx:latest
+FROM ${NGINX_BASE_IMAGE}
 
 WORKDIR /usr/share/nginx/html
 

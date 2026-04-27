@@ -273,7 +273,7 @@ import { listKnowledgeBase } from "@/api/rag/knowledgeBase";
 const LARGE_HINT_FILE_COUNT_THRESHOLD = 100;
 const LARGE_HINT_TOTAL_SIZE_BYTES = 1024 * 1024 * 1024;
 const DEFAULT_UPLOAD_POLICY = Object.freeze({
-  allowedExtensions: ["pdf", "doc", "docx"],
+  allowedExtensions: ["pdf", "doc", "docx", "wps"],
   submitConcurrency: 2,
   queueSize: 0,
   maxTotalSizeBytes: 0,
@@ -401,8 +401,8 @@ function getList(isBackground = false) {
   }
   return listDocument(queryParams.value)
     .then(response => {
-      docList.value = response.data || [];
-      total.value = response.total ?? docList.value.length;
+      docList.value = response.rows || [];
+      total.value = response.total ?? 0;
     })
     .finally(() => {
       if (!isBackground) {
