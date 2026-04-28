@@ -180,6 +180,7 @@
               </div>
               <div class="upload-toolbar-tip">
                 <div>仅会加入 {{ uploadAllowedExtensionText }} 文件。上传成功后会进入后端解析队列，按队列顺序处理。</div>
+                <div>如果 .wps 只是改后缀为 .docx，仍可能失败。建议先在 WPS/Word 中另存为 DOCX，服务端也会自动尝试转换。</div>
                 <div
                   v-for="tip in uploadConstraintTips"
                   :key="tip"

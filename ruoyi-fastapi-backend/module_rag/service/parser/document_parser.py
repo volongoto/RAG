@@ -9,6 +9,7 @@ from typing import Any
 
 import fitz
 from docx import Document
+from docx.opc.exceptions import PackageNotFoundError
 from loguru import logger
 
 from exceptions.exception import ServiceException
@@ -80,6 +81,7 @@ class DocxParser(BaseParser):
         paragraphs = []
         converted_file_path = ''
         converted_output_dir = ''
+        source_file_path = file_path
         try:
             detected_format = self._detect_word_file_format(file_path)
             logger.info(f'Word parser detected format: path={file_path}, detected_format={detected_format}')
@@ -94,7 +96,12 @@ class DocxParser(BaseParser):
                 converted_output_dir = os.path.dirname(converted_file_path)
                 file_path = converted_file_path
 
-            doc = Document(file_path)
+            doc, converted_file_path, converted_output_dir = self._open_docx_or_convert(
+                source_file_path,
+                file_path,
+                converted_file_path,
+                converted_output_dir,
+            )
             para_index = 0
             for para in doc.paragraphs:
                 text = para.text.strip()
@@ -125,6 +132,33 @@ class DocxParser(BaseParser):
                     logger.warning(f'Failed to remove temporary conversion directory: {converted_output_dir}')
         return paragraphs
 
+    def _open_docx_or_convert(
+        self,
+        source_file_path: str,
+        file_path: str,
+        converted_file_path: str,
+        converted_output_dir: str,
+    ):
+        try:
+            return Document(file_path), converted_file_path, converted_output_dir
+        except (PackageNotFoundError, zipfile.BadZipFile, KeyError, ValueError) as exc:
+            if converted_file_path:
+                raise ServiceException(
+                    message='Word document could not be opened after conversion. Please save it as DOCX and upload again.'
+                ) from exc
+
+            logger.warning(
+                'DOCX open failed, trying LibreOffice conversion fallback: '
+                f'source={source_file_path}, error={exc}'
+            )
+            fallback_file_path = self._convert_office_file_to_docx(source_file_path, source_label='WPS/Word')
+            try:
+                return Document(fallback_file_path), fallback_file_path, os.path.dirname(fallback_file_path)
+            except (PackageNotFoundError, zipfile.BadZipFile, KeyError, ValueError) as fallback_exc:
+                raise ServiceException(
+                    message='Word document could not be opened after automatic conversion. Please save it as DOCX and upload again.'
+                ) from fallback_exc
+
     def _convert_doc_to_docx(self, file_path: str) -> str:
         return self._convert_office_file_to_docx(file_path, source_label='DOC')
 
@@ -132,7 +166,10 @@ class DocxParser(BaseParser):
         office_binary = shutil.which('soffice') or shutil.which('libreoffice')
         if not office_binary:
             raise ServiceException(
-                message='Word parsing requires LibreOffice for legacy or non-standard office files.'
+                message=(
+                    'This document is not a standard DOCX package. '
+                    'Please install LibreOffice on the server, or save it as DOCX in WPS/Word and upload again.'
+                )
             )
 
         readable_source_label = (source_label or Path(file_path).suffix.lstrip('.').upper() or 'OFFICE').strip()
@@ -162,13 +199,16 @@ class DocxParser(BaseParser):
                 f'returncode={result.returncode}, stdout={result.stdout}, stderr={result.stderr}'
             )
             raise ServiceException(
-                message=f'{readable_source_label} conversion failed. Please check the file or resave it as DOCX.'
+                message=f'{readable_source_label} conversion failed. Please save the file as DOCX in WPS/Word and upload again.'
             )
 
         converted_path = os.path.join(output_dir, f'{Path(file_path).stem}.docx')
         if not os.path.exists(converted_path):
             raise ServiceException(
-                message=f'{readable_source_label} conversion finished but no DOCX file was generated.'
+                message=(
+                    f'{readable_source_label} conversion finished but no DOCX file was generated. '
+                    'Please save the file as DOCX in WPS/Word and upload again.'
+                )
             )
         logger.info(
             f'{readable_source_label} converted to DOCX successfully: source={file_path}, target={converted_path}'
