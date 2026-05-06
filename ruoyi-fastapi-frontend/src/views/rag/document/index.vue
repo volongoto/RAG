@@ -63,7 +63,13 @@
 
     <el-table v-loading="loading" :data="docList" @selection-change="handleSelectionChange">
       <el-table-column type="selection" width="55" align="center" />
-      <el-table-column prop="fileName" label="文件名称" min-width="220" show-overflow-tooltip />
+      <el-table-column label="文件名称" min-width="220">
+        <template #default="{ row }">
+          <el-tooltip :content="getDocumentFileName(row)" placement="top" :show-after="300">
+            <span class="file-name-text">{{ getDocumentFileName(row) }}</span>
+          </el-tooltip>
+        </template>
+      </el-table-column>
       <el-table-column prop="fileType" label="类型" width="90">
         <template #default="{ row }">
           <el-tag :type="row.fileType === 'pdf' ? 'danger' : 'primary'">
@@ -220,7 +226,13 @@
             <el-empty v-if="!uploadItems.length" description="请选择文件或目录" />
             <el-table v-else :data="uploadItems" row-key="id" max-height="320">
               <el-table-column type="index" width="60" align="center" label="#" />
-              <el-table-column prop="fileName" label="文件名称" min-width="180" show-overflow-tooltip />
+              <el-table-column label="文件名称" min-width="180">
+                <template #default="{ row }">
+                  <el-tooltip :content="getUploadFileName(row)" placement="top" :show-after="300">
+                    <span class="file-name-text">{{ getUploadFileName(row) }}</span>
+                  </el-tooltip>
+                </template>
+              </el-table-column>
               <el-table-column label="目录路径" min-width="220" show-overflow-tooltip>
                 <template #default="{ row }">
                   <span class="path-text">{{ row.relativeDir || '--' }}</span>
@@ -273,6 +285,7 @@ import { listKnowledgeBase } from "@/api/rag/knowledgeBase";
 
 const LARGE_HINT_FILE_COUNT_THRESHOLD = 100;
 const LARGE_HINT_TOTAL_SIZE_BYTES = 1024 * 1024 * 1024;
+const UNKNOWN_FILE_NAME = "未命名文件";
 const DEFAULT_UPLOAD_POLICY = Object.freeze({
   allowedExtensions: ["pdf", "doc", "docx", "wps"],
   submitConcurrency: 2,
@@ -402,7 +415,10 @@ function getList(isBackground = false) {
   }
   return listDocument(queryParams.value)
     .then(response => {
-      docList.value = response.rows || [];
+      docList.value = (response.rows || []).map(row => ({
+        ...row,
+        fileName: getDocumentFileName(row)
+      }));
       total.value = response.total ?? 0;
     })
     .finally(() => {
@@ -516,8 +532,43 @@ function getFileExtension(fileName = "") {
   return fileName.includes(".") ? fileName.split(".").pop().toLowerCase() : "";
 }
 
+function normalizeDisplayText(value) {
+  return String(value ?? "").trim();
+}
+
+function getPathFileName(path = "") {
+  const normalizedPath = normalizeDisplayText(path);
+  if (!normalizedPath) {
+    return "";
+  }
+  return normalizedPath.split(/[\\/]/).filter(Boolean).pop() || "";
+}
+
+function getDocumentFileName(row = {}) {
+  return (
+    normalizeDisplayText(row.fileName) ||
+    normalizeDisplayText(row.file_name) ||
+    getPathFileName(row.filePath || row.file_path) ||
+    UNKNOWN_FILE_NAME
+  );
+}
+
+function getNativeFileName(file) {
+  return normalizeDisplayText(file?.name) || getPathFileName(file?.webkitRelativePath);
+}
+
+function getUploadFileName(item = {}) {
+  return (
+    normalizeDisplayText(item.fileName) ||
+    getPathFileName(item.relativePath) ||
+    getPathFileName(item.file?.webkitRelativePath) ||
+    normalizeDisplayText(item.file?.name) ||
+    UNKNOWN_FILE_NAME
+  );
+}
+
 function isSupportedFile(file) {
-  return new Set(normalizedAllowedExtensions.value).has(getFileExtension(file?.name));
+  return new Set(normalizedAllowedExtensions.value).has(getFileExtension(getNativeFileName(file)));
 }
 
 function buildUploadItemId(file) {
@@ -526,10 +577,11 @@ function buildUploadItemId(file) {
 
 function createUploadItem(file) {
   const relativePath = file.webkitRelativePath || "";
+  const fileName = getNativeFileName(file) || UNKNOWN_FILE_NAME;
   return {
     id: buildUploadItemId(file),
     file,
-    fileName: file.name || "未命名文件",
+    fileName,
     relativePath,
     relativeDir: relativePath ? relativePath.split("/").slice(0, -1).join("/") : "",
     fileSize: file.size || 0,
@@ -721,7 +773,7 @@ function getUploadStatusType(status) {
 }
 
 function formatUploadItemName(item) {
-  return item.relativePath || item.fileName || "未命名文件";
+  return normalizeDisplayText(item.relativePath) || getUploadFileName(item);
 }
 
 function buildUploadSummary(successFiles, failedFiles) {
@@ -896,6 +948,15 @@ onBeforeUnmount(() => {
 
 .parse-progress-text.is-error {
   color: var(--el-color-danger);
+}
+
+.file-name-text {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
 }
 
 .upload-panel {

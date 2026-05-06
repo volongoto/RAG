@@ -1792,11 +1792,23 @@ class DocumentService:
                     await ChunkDao.delete_chunks_by_doc_id_dao(db, doc_id)
                     await DocumentDao.update_parse_status_dao(db, doc_id, '3', error_msg=str(exc))
                     await db.commit()
-            except Exception:
-                pass
-            await cls._set_progress(redis, doc_id, 0, f'Failed: {str(exc)}')
+            except Exception as status_exc:
+                logger.exception(
+                    f'Failed to mark document parsing as failed: doc_id={doc_id}, error={status_exc}'
+                )
+            try:
+                await cls._set_progress(redis, doc_id, 0, f'Failed: {str(exc)}')
+            except Exception as progress_exc:
+                logger.exception(
+                    f'Failed to write document parsing failure progress: doc_id={doc_id}, error={progress_exc}'
+                )
         finally:
-            await DocumentStorageService.cleanup_parse_file(parse_file_path, should_cleanup_parse_file)
+            try:
+                await DocumentStorageService.cleanup_parse_file(parse_file_path, should_cleanup_parse_file)
+            except Exception as cleanup_exc:
+                logger.exception(
+                    f'Failed to cleanup parse file: doc_id={doc_id}, path={parse_file_path}, error={cleanup_exc}'
+                )
             cls._parse_tasks.pop(doc_id, None)
 
     @classmethod
